@@ -59,30 +59,33 @@ class VOCDataset(Dataset):
         #to tensor & normalize
         img = img[:, :, (2,1,0)] #to RGB
         img = self.transform(img)
+        boxes = torch.from_numpy(boxes)
+        labels = torch.from_numpy(labels)
         
         return img, boxes, labels
-    
-    def collate_fn(self, batch):
-        """ Explaination
-        Since each image may have a different number of objects, we need a collate function (to be passed to the DataLoader).
-        This describes how to combine these tensors of different sizes. We use lists.
-        Note: this need not be defined in this Class, can be standalone.
-        
-        :param batch: an iterable of N sets from __getitem__()
-        :return: a tensor of images, lists of varying-size tensors of bounding boxes, labels, and difficulties
-        """
-        batch_imgs = list()
-        batch_boxes = list()
-        batch_labels = list()
-        
-        for img, b, l, d in batch:
-            batch_imgs.append(img)
-            batch_boxes.append(b)
-            batch_labels.append(l)
-            
-        images = torch.stack(images, dim=0)
-        
-        return batch_imgs, batch_boxes, batch_labels  # tensor(N, 3, 300, 300) and 2 lists of N tensors each
+
+
+def collate_fn(batch):
+    """ Explaination
+    Since each image may have a different number of objects, we need a collate function (to be passed to the DataLoader).
+    This describes how to combine these tensors of different sizes. We use lists.
+    Note: this need not be defined in this Class, can be standalone.
+
+    :param batch: an iterable of N sets from __getitem__()
+    :return: a tensor of images, lists of varying-size tensors of bounding boxes, labels, and difficulties
+    """
+    batch_imgs = list()
+    batch_boxes = list()
+    batch_labels = list()
+
+    for imgs, boxes, labels in batch:
+        batch_imgs.append(imgs)
+        batch_boxes.append(boxes)
+        batch_labels.append(labels)
+
+    batch_imgs = torch.stack(batch_imgs, dim=0)
+
+    return batch_imgs, batch_boxes, batch_labels  # tensor(N, 3, 300, 300) and 2 lists of N tensors each
 
 if __name__=="__main__":
     torch.manual_seed(42)
@@ -92,17 +95,14 @@ if __name__=="__main__":
     trainset, valset = random_split(trainset, [train_size, val_size])
     #testset = VOCDataset(data_folder='datasets/', is_trainset=False)
 
-    '''
     dataloaders = dict(
-        train = DataLoader(trainset, batch_size=16, shuffle=True, num_workers=0),
-        val = DataLoader(valset, batch_size=64, shuffle=False, num_workers=0),
-        test = DataLoader(testset, batch_size=64, shuffle=False, num_workers=0)
-    )'''
+        train = DataLoader(trainset, batch_size=8, collate_fn=collate_fn, shuffle=True, num_workers=2),
+        val = DataLoader(valset, batch_size=64, collate_fn=collate_fn, shuffle=False, num_workers=2),
+        #test = DataLoader(testset, batch_size=64, collate_fn=collate_fn, shuffle=False, num_workers=2)
+    )
     
-    val = DataLoader(valset, batch_size=1, shuffle=False, num_workers=0)
-    
-    for img, b, l in val:
-        print(img.shape)
-        print(b)
-        print(l)
-        break
+    for imgs, boxes, labels in dataloaders['train']:
+        print(imgs.shape)
+        print(boxes)
+        print(labels)
+        breakpoint()
