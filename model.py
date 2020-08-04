@@ -1,9 +1,9 @@
 import torch
-import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 from utils import *
 from math import sqrt
+from torchvision.ops import nms
 
 
 class SSD300(nn.Module):
@@ -60,6 +60,7 @@ class SSD300(nn.Module):
         self.det_conv11_2 = nn.Conv2d(256, 4*(4+n_classes), kernel_size=3, padding=1)
         
         self.init_weights()
+        self.priors_cxcy = self.get_prior_boxes()
 
 
     def init_weights(self):
@@ -180,7 +181,8 @@ class SSD300(nn.Module):
     def get_prior_boxes(self):
         """
         Create the 8732 prior (default) boxes for the SSD300, as defined in the paper.
-        :return: prior boxes in center-size coordinates, a tensor of dimensions (8732, 4)
+        Return: 
+            prior boxes in center-size coordinates, a tensor of dimensions (8732, 4)
         """
         fmap_dims = {'conv4_3': 38,
                      'conv7': 19,
@@ -219,7 +221,7 @@ class SSD300(nn.Module):
                         h = s / sqrt(ratio)
                         prior_boxes.append([cx, cy, w, h])
                         
-                    # additional prior box:
+                    # an additional prior box:
                     if dim > 1:
                         additional_scale = sqrt(s * obj_scales[fmaps[k + 1]])
                     else:
@@ -233,20 +235,68 @@ class SSD300(nn.Module):
         return prior_boxes
 
     
-    def detect_objects(self, predicted_offsets, predicted_scores, min_score, max_overlap, top_k):
+    def detect_objects(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold):
         """
         Decode the 8732 locations and class scores (output of ths SSD300) to detect objects.
         For each class, perform Non-Maximum Suppression (NMS) on boxes that are above a minimum threshold.
+        Notes: 
+            The use of torch.no_grad() or torch.set_grad_enabled(False) before calling this method is recommended
+            Since this method is only called for evaluation and inference purpose so there is no need for calculating grads
         
-        :param predicted_offsets: predicted offsets w.r.t the 8732 prior boxes, (gcxgcy), a tensor of dimensions (N, 8732, 4)
-        :param predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8732, n_classes)
-        :param min_score: minimum threshold for a box to be considered a match for a certain class
-        :param max_overlap: maximum overlap two boxes can have so that the one with the lower score is not suppressed via NMS
-        :param top_k: if there are a lot of resulting detection across all classes, keep only the top 'k'
-        :return: detections (boxes, labels, and scores), lists of length batch_size
+        Params:
+            predicted_offsets: predicted offsets w.r.t the 8732 prior boxes, (gcxgcy), a tensor of dimensions (N, 8732, 4)
+            predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8732, n_classes)
+            score_threshold: minimum threshold for a box to be considered a match for a certain class
+            iou_threshold: maximum overlap two boxes can have so that the one with the lower score is not suppressed via NMS
+        Return: 
+            detections: (boxes, labels, and scores), lists of N tensors
+            boxes: N (n_boxes, 4)
+            labels: N (n_boxes,)
+            scores: N (n_boxes,)
         """
+        boxes = list()
+        labels = list()
+        scores = list()
         
-        return all_images_boxes, all_images_labels, all_images_scores  # lists of length batch_size
+        N, n_priors = predicted_offsets.shape[0:2]
+        predicted_scores = F.softmax(predicted_scores, dim=2)  # (N, 8732, n_classes)
+        
+        # for each box, find the largest score and the class_id with respect to it
+        class_scores, class_ids = predicted_scores.max(dim=2) # (N, 8732) and (N, 8732)
+        
+        # for each unprocessed predictions in the batch:
+        for i in range(N):
+            boxes_i = list()
+            labels_i = list()
+            scores_i = list()
+            
+            # filter out boxes that are not qualified, that were predicted as background or with low confidence score
+            qualify_mask = (class_ids[i] != 0) & (class_scores[i] > score_threshold) # (8732)
+            qualified_boxes = predicted_offsets[i][qualify_mask]  # (n_qualified_boxes, 4)
+            qualified_boxes_class = class_ids[i][qualify_mask]    # (n_qualified_boxes)
+            qualified_boxes_score = class_scores[i][qualify_mask] # (n_qualified_boxes)
+            
+            # convert to xy coordinates format
+            qualified_boxes = cxcy_to_xy(gcxgcy_to_cxcy(qualified_boxes, self.priors_cxcy[qualify_mask])) # (n_qualified_boxes, 4)
+            
+            # Non-max suppression
+            for class_i in qualified_boxes_class.unique(sorted=False).tolist():
+                class_mask = qualified_boxes_class == class_i
+                
+                boxes_class_i = qualified_boxes[class_mask]
+                boxes_score_class_i = qualified_boxes_score[class_mask]
+                
+                final_box_ids = nms(boxes_class_i, boxes_score_class_i, iou_threshold)  # (n_final_boxes,)
+                
+                boxes_i.extend(boxes_class_i[final_box_ids].tolist())
+                labels_i.extend([class_i]*len(final_box_ids))
+                scores_i.extend(boxes_score_class_i[final_box_ids].tolist())
+        
+            boxes.append(torch.FloatTensor(boxes_i))
+            labels.append(torch.LongTensor(labels_i))
+            scores.append(torch.FloatTensor(scores_i))
+        
+        return boxes, labels, scores 
     
     
 
@@ -264,11 +314,13 @@ class MultiBoxLoss(nn.Module):
         
     def forward(self, predicted_offsets, predicted_scores, boxes, labels):
         '''
-        :param predicted_offsets: predicted offsets w.r.t the 8732 prior boxes, (gcxgcy), a tensor of dimensions (N, 8732, 4)
-        :param predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8732, n_classes)
-        :param boxes: true  object bounding boxes in boundary coordinates, (xy), a list of N tensors (n_objects, 4)
-        :param labels: true object labels, a list of N tensors (n_objects,)
-        :return: multibox loss, a scalar
+        Params:
+            predicted_offsets: predicted offsets w.r.t the 8732 prior boxes, (gcxgcy), a tensor of dimensions (N, 8732, 4)
+            predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8732, n_classes)
+            boxes: true  object bounding boxes in boundary coordinates, (xy), a list of N tensors: (n_objects, 4)
+            labels: true object labels, a list of N tensors: (n_objects,)
+        Return: 
+            multibox loss, a scalar
         '''
         N = predicted_offsets.shape[0]
         n_priors = self.priors_cxcy.size(0)
@@ -290,8 +342,7 @@ class MultiBoxLoss(nn.Module):
             # for each object, find the most suited prior id
             _, object_prior = overlap.max(dim=0) #(n_objects)
             # for each object, assign its most suited prior with object id 
-            #for j in range(n_objects):
-            #    prior_obj[object_prior[j]] = j
+            #for j in range(n_objects): prior_obj[object_prior[j]] = j
             prior_obj[object_prior] = torch.LongTensor(range(n_objects))
             # for each object, assign its most suited prior with hight iou to ensure it qualifies the thresholding 
             prior_iou[object_prior] = 1.
@@ -337,9 +388,11 @@ class MultiBoxLoss(nn.Module):
 
 
 if __name__ == "__main__":
-    MySSD300 = SSD300(n_classes = 21)
+    torch.set_grad_enabled(False)
     
-    loss_func = MultiBoxLoss(priors_cxcy = MySSD300.get_prior_boxes(), threshold=0.5, neg_pos_ratio=3, alpha=1.)
+    MySSD300 = SSD300(n_classes = 21)
+    loss_func = MultiBoxLoss(priors_cxcy = MySSD300.priors_cxcy, threshold=0.5, neg_pos_ratio=3, alpha=1.)
+    
     
     predicted_offsets = torch.randn((2,8732,4))
     predicted_scores = torch.randn((2,8732,21))
@@ -347,6 +400,11 @@ if __name__ == "__main__":
     boxes = [torch.Tensor([[0.1, 0.2, 0.3, 0.4]]), torch.Tensor([[0.1, 0.2, 0.3, 0.4]])]
     labels = [torch.LongTensor([2]), torch.LongTensor([3])]
     
+    # test loss function
     loss = loss_func.forward(predicted_offsets, predicted_scores, boxes, labels)
-    
     print(loss.item())
+    
+    # test detect objects
+    boxes, labels, scores = MySSD300.detect_objects(predicted_offsets, predicted_scores, score_threshold=0.6, iou_threshold=0.5)
+    breakpoint()
+    
