@@ -1,5 +1,27 @@
 """ Attribution to sgrvinod
-From https://github.com/sgrvinod/a-PyTorch-Tutorial-to-Object-Detection/blob/master/utils.py
+src from https://github.com/sgrvinod/a-PyTorch-Tutorial-to-Object-Detection/blob/master/utils.py
+
+MIT License
+
+Copyright (c) 2018 sgrvinod
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 """
 
 import json
@@ -44,10 +66,10 @@ def parse_annotation(annotation_path):
             continue
 
         bbox = object.find('bndbox')
-        xmin = int(bbox.find('xmin').text) - 1
-        ymin = int(bbox.find('ymin').text) - 1
-        xmax = int(bbox.find('xmax').text) - 1
-        ymax = int(bbox.find('ymax').text) - 1
+        xmin = float(bbox.find('xmin').text) - 1
+        ymin = float(bbox.find('ymin').text) - 1
+        xmax = float(bbox.find('xmax').text) - 1
+        ymax = float(bbox.find('ymax').text) - 1
 
         boxes.append([xmin, ymin, xmax, ymax])
         labels.append(label_map[label])
@@ -64,12 +86,12 @@ def create_data_lists(voc07_path, voc12_path, output_folder):
     :param output_folder: folder where the JSONs must be saved
     """
     """ 
-    my changes -> so that training and testing would be consistent with the paper:
+    my modifications -> so that train and test set would be consistent with the paper:
     train set will include both VOC07 train-val-test set and VOC12 train-val set
     test set is the VOC12 test set
     """
-    voc07_path = os.path.abspath(voc07_path)
-    voc12_path = os.path.abspath(voc12_path)
+    #voc07_path = os.path.abspath(voc07_path)
+    #voc12_path = os.path.abspath(voc12_path)
 
     # Training data
     train_images = list()
@@ -104,7 +126,7 @@ def create_data_lists(voc07_path, voc12_path, output_folder):
         json.dump(label_map, j)  # save label map too
 
     print('\nThere are %d training images containing a total of %d objects. Files have been saved to %s.' % (
-        len(train_images), n_objects, os.path.abspath(output_folder)))
+        len(train_images), n_objects, output_folder))
     
     # Test data
     test_images = list()
@@ -132,7 +154,7 @@ def create_data_lists(voc07_path, voc12_path, output_folder):
         json.dump(test_objects, j)
 
     print('\nThere are %d test images containing a total of %d objects. Files have been saved to %s.' % (
-        len(test_images), n_objects, os.path.abspath(output_folder)))
+        len(test_images), n_objects, output_folder))
 
 
 def decimate(tensor, m):
@@ -162,9 +184,7 @@ def calculate_mAP(det_boxes, det_labels, det_scores, true_boxes, true_labels, tr
     :param true_difficulties: list of tensors, one tensor for each image containing actual objects' difficulty (0 or 1)
     :return: list of average precisions for all classes, mean average precision (mAP)
     """
-    assert len(det_boxes) == len(det_labels) == len(det_scores) == len(true_boxes) == len(
-        true_labels) == len(
-        true_difficulties)  # these are all lists of tensors of the same length, i.e. number of images
+    assert len(det_boxes) == len(det_labels) == len(det_scores) == len(true_boxes) == len(true_labels) == len(true_difficulties)  
     n_classes = len(label_map)
 
     # Store all (true) objects in a single continuous tensor while keeping track of the image it is from

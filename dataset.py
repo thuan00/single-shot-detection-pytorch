@@ -8,15 +8,6 @@ from torchvision import transforms
 from aug2 import SSDAugmentation
 
 
-def VOCbbox_transform(boxes, h, w):
-    ''' Normalize the bbox coordinates to 0-1 inplace
-    boxes: np array shape(n_boxes, 4)
-    '''
-    boxes[:,0] /= w
-    boxes[:,1] /= h
-    boxes[:,2] /= w
-    boxes[:,3] /= h
-
 class VOCDataset(Dataset):
     def __init__(self, data_folder, is_trainset=True):
         self.root = data_folder
@@ -49,8 +40,7 @@ class VOCDataset(Dataset):
         h, w = img.shape[0:2]
         
         target = self.targets[index]
-        boxes = np.array(target['boxes'], dtype='float32')
-        VOCbbox_transform(boxes, h, w)
+        boxes = bbox_transform(np.array(target['boxes'], dtype='float32'), h, w)
         labels = np.array(target['labels'], dtype='int32')
         
         if self.augment is not None:
@@ -61,9 +51,19 @@ class VOCDataset(Dataset):
         img = self.transform(img)
         boxes = torch.from_numpy(boxes)
         labels = torch.from_numpy(labels)
+        diffs = torch.IntTensor(target['difficulties'])
         
-        return img, boxes, labels
+        return img, boxes, labels, diffs
 
+
+def bbox_transform(boxes, h, w):
+    ''' Normalize the bbox coordinates to 0-1 inplace
+    boxes: np array shape(n_boxes, 4)
+    '''
+    boxes[:,0] /= w
+    boxes[:,1] /= h
+    boxes[:,2] /= w
+    boxes[:,3] /= h
 
 def collate_fn(batch):
     """ Explaination
@@ -71,21 +71,24 @@ def collate_fn(batch):
     This describes how to combine these tensors of different sizes. We use lists.
     Note: this need not be defined in this Class, can be standalone.
 
-    :param batch: an iterable of N sets from __getitem__()
-    :return: a tensor of images, lists of varying-size tensors of bounding boxes, labels, and difficulties
+    Param: batch: an iterable of N sets from __getitem__()
+    Return: a tensor of images, lists of varying-size tensors of bounding boxes, labels, and difficulties
     """
     batch_imgs = list()
     batch_boxes = list()
     batch_labels = list()
+    batch_diffs = list()
 
-    for imgs, boxes, labels in batch:
+    for imgs, boxes, labels, diffs in batch:
         batch_imgs.append(imgs)
         batch_boxes.append(boxes)
         batch_labels.append(labels)
+        batch_diffs.append(diffs)
 
     batch_imgs = torch.stack(batch_imgs, dim=0)
 
-    return batch_imgs, batch_boxes, batch_labels  # tensor(N, 3, 300, 300) and 2 lists of N tensors each
+    return batch_imgs, batch_boxes, batch_labels, batch_diffs  # tensor(N, 3, 300, 300) and 2 lists of N tensors each
+
 
 if __name__=="__main__":
     torch.manual_seed(42)
@@ -101,7 +104,7 @@ if __name__=="__main__":
         #test = DataLoader(testset, batch_size=64, collate_fn=collate_fn, shuffle=False, num_workers=2)
     )
     
-    for imgs, boxes, labels in dataloaders['train']:
+    for imgs, boxes, labels,_ in dataloaders['train']:
         print(imgs.shape)
         print(boxes)
         print(labels)
