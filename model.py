@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from utils import *
 from math import sqrt
 from torchvision.ops import nms
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class SSD300(nn.Module):
     def __init__(self, n_classes, vgg16_dir, checkpoint):
@@ -233,7 +233,7 @@ class SSD300(nn.Module):
                         additional_scale = 1
                     prior_boxes.append([cx, cy, additional_scale, additional_scale])
         
-        prior_boxes = torch.FloatTensor(prior_boxes)
+        prior_boxes = torch.FloatTensor(prior_boxes).to(device)
         prior_boxes.clamp_(min=0, max=1)
         assert prior_boxes.shape == (8732,4)
         
@@ -298,9 +298,9 @@ class SSD300(nn.Module):
                     labels_i.extend([class_i]*len(final_box_ids))
                     scores_i.extend(boxes_score_class_i[final_box_ids].tolist())
         
-            boxes.append(torch.FloatTensor(boxes_i))
-            labels.append(torch.LongTensor(labels_i))
-            scores.append(torch.FloatTensor(scores_i))
+            boxes.append(torch.FloatTensor(boxes_i).to(device))
+            labels.append(torch.LongTensor(labels_i).to(device))
+            scores.append(torch.FloatTensor(scores_i).to(device))
         
         return boxes, labels, scores 
 
@@ -331,8 +331,8 @@ class MultiBoxLoss(nn.Module):
         n_priors = self.priors_cxcy.size(0)
         n_classes = predicted_scores.size(2)
         
-        truth_offsets = torch.zeros((N, n_priors, 4), dtype=torch.float)
-        truth_classes = torch.zeros((N, n_priors), dtype=torch.long)
+        truth_offsets = torch.zeros((N, n_priors, 4), dtype=torch.float).to(device)
+        truth_classes = torch.zeros((N, n_priors), dtype=torch.long).to(device)
         
         # Matching ground truth boxes
         # for each image
@@ -348,7 +348,7 @@ class MultiBoxLoss(nn.Module):
             _, object_prior = overlap.max(dim=0) #(n_objects)
             # for each object, assign its most suited prior with object id 
             #for j in range(n_objects): prior_obj[object_prior[j]] = j
-            prior_obj[object_prior] = torch.LongTensor(range(n_objects))
+            prior_obj[object_prior] = torch.LongTensor(range(n_objects)).to(device)
             # for each object, assign its most suited prior with hight iou to ensure it qualifies the thresholding 
             prior_iou[object_prior] = 1.
             
