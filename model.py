@@ -367,10 +367,11 @@ class MultiBoxLoss(nn.Module):
         # Now we have truth_offsets, truth_classes and predicted_offsets, predicted_scores, we can now calculate the loss
         
         positive_priors = (truth_classes != 0) #(N,8732)
+        n_positives = positive_priors.sum(dim=1)  # (N)
         
         # Calculating loss = alpha*loc_loss + conf_loss
         # loc_loss: localization loss
-        loc_loss = self.smooth_l1(predicted_offsets[positive_priors], truth_offsets[positive_priors])
+        loc_loss = self.smooth_l1(predicted_offsets[positive_priors], truth_offsets[positive_priors], size_average=False)
         
         # Confidence loss
         full_conf_loss = self.cross_entropy(predicted_scores.view(-1, n_classes), truth_classes.view(-1)) #(N*n_priors)
@@ -378,18 +379,16 @@ class MultiBoxLoss(nn.Module):
         # However there is a huge unbalance between positive and negative priors so we only take the loss of the hard negative priors
 
         # Hard negative mining
-        n_positives = positive_priors.sum(dim=1)  # (N)
         n_hard_negatives = self.neg_pos_ratio * n_positives  # (N)
-        
         conf_loss_hard_neg = 0
         # accummulate conf_loss_hard_neg for each sample in batch
         for i in range(N):
             conf_loss_neg,_ = full_conf_loss[i][~positive_priors[i]].sort(dim=0, descending=True) # (1-n_positives)
             conf_loss_hard_neg = conf_loss_hard_neg + conf_loss_neg[0:n_hard_negatives[i]].sum()
         
-        conf_loss = full_conf_loss[positive_priors].sum() + conf_loss_hard_neg
+        conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg)
 
-        return self.alpha * loc_loss + conf_loss
+        return (self.alpha * loc_loss + conf_loss) / n_positives.sum()
 
 
 if __name__ == "__main__":
