@@ -7,9 +7,10 @@ from torchvision.ops import nms
 
 
 class SSD300(nn.Module):
-    def __init__(self, n_classes):
+    def __init__(self, n_classes, vgg16_dir, checkpoint):
         super(SSD300, self).__init__()
         self.n_classes = n_classes
+        self.vgg16_dir = vgg16_dir
         
         # VGG16 conv layers
         self.conv1_1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)    # 300x300
@@ -59,7 +60,11 @@ class SSD300(nn.Module):
         self.det_conv10_2 = nn.Conv2d(256, 4*(4+n_classes), kernel_size=3, padding=1)
         self.det_conv11_2 = nn.Conv2d(256, 4*(4+n_classes), kernel_size=3, padding=1)
         
-        self.init_weights()
+        if checkpoint == None:
+            self.init_weights()
+        else:
+            self.load_state_dict(checkpoint['model'])
+            
         self.priors_cxcy = self.get_prior_boxes()
 
 
@@ -70,7 +75,7 @@ class SSD300(nn.Module):
         layer_names = list(state_dict.keys())
         
         vgg16_url = "https://download.pytorch.org/models/vgg16-397923af.pth"
-        vgg16 = torch.hub.load_state_dict_from_url(vgg16_url, model_dir='models/')
+        vgg16 = torch.hub.load_state_dict_from_url(vgg16_url, model_dir = self.vgg16_dir)
         vgg16_layer_names = list(vgg16.keys())
             
         # Load from conv1_1 .. conv5_3
@@ -179,11 +184,11 @@ class SSD300(nn.Module):
     
     
     def get_prior_boxes(self):
-        """
+        '''
         Create the 8732 prior (default) boxes for the SSD300, as defined in the paper.
         Return: 
             prior boxes in center-size coordinates, a tensor of dimensions (8732, 4)
-        """
+        '''
         fmap_dims = {'conv4_3': 38,
                      'conv7': 19,
                      'conv8_2': 10,
@@ -236,7 +241,7 @@ class SSD300(nn.Module):
 
     
     def detect_objects(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold):
-        """
+        '''
         Decode the 8732 locations and class scores (output of ths SSD300) to detect objects.
         For each class, perform Non-Maximum Suppression (NMS) on boxes that are above a minimum threshold.
         Notes: 
@@ -253,7 +258,7 @@ class SSD300(nn.Module):
             boxes: N (n_boxes, 4)
             labels: N (n_boxes,)
             scores: N (n_boxes,)
-        """
+        '''
         boxes = list()
         labels = list()
         scores = list()
@@ -276,29 +281,29 @@ class SSD300(nn.Module):
             qualified_boxes_class = class_ids[i][qualify_mask]    # (n_qualified_boxes)
             qualified_boxes_score = class_scores[i][qualify_mask] # (n_qualified_boxes)
             
-            # convert to xy coordinates format
-            qualified_boxes = cxcy_to_xy(gcxgcy_to_cxcy(qualified_boxes, self.priors_cxcy[qualify_mask])) # (n_qualified_boxes, 4)
-            
-            # Non-max suppression
-            for class_i in qualified_boxes_class.unique(sorted=False).tolist():
-                class_mask = qualified_boxes_class == class_i
-                
-                boxes_class_i = qualified_boxes[class_mask]
-                boxes_score_class_i = qualified_boxes_score[class_mask]
-                
-                final_box_ids = nms(boxes_class_i, boxes_score_class_i, iou_threshold)  # (n_final_boxes,)
-                
-                boxes_i.extend(boxes_class_i[final_box_ids].tolist())
-                labels_i.extend([class_i]*len(final_box_ids))
-                scores_i.extend(boxes_score_class_i[final_box_ids].tolist())
+            if len(qualified_boxes) != 0:
+                # convert to xy coordinates format
+                qualified_boxes = cxcy_to_xy(gcxgcy_to_cxcy(qualified_boxes, self.priors_cxcy[qualify_mask])) # (n_qualified_boxes, 4)
+
+                # Non-max suppression
+                for class_i in qualified_boxes_class.unique(sorted=False).tolist():
+                    class_mask = qualified_boxes_class == class_i
+
+                    boxes_class_i = qualified_boxes[class_mask]
+                    boxes_score_class_i = qualified_boxes_score[class_mask]
+
+                    final_box_ids = nms(boxes_class_i, boxes_score_class_i, iou_threshold)  # (n_final_boxes,)
+
+                    boxes_i.extend(boxes_class_i[final_box_ids].tolist())
+                    labels_i.extend([class_i]*len(final_box_ids))
+                    scores_i.extend(boxes_score_class_i[final_box_ids].tolist())
         
             boxes.append(torch.FloatTensor(boxes_i))
             labels.append(torch.LongTensor(labels_i))
             scores.append(torch.FloatTensor(scores_i))
         
         return boxes, labels, scores 
-    
-    
+
 
 
 class MultiBoxLoss(nn.Module):
