@@ -217,8 +217,8 @@ class SSD300(nn.Module):
             dim = fmap_dims[fmap]
             for i in range(dim):
                 for j in range(dim):
-                    cx = (j + 0.5) * dim
-                    cy = (i + 0.5) * dim
+                    cx = (j + 0.5) / dim
+                    cy = (i + 0.5) / dim
                     
                     s = obj_scales[fmap]
                     for ratio in aspect_ratios[fmap]:
@@ -397,7 +397,6 @@ if __name__ == "__main__":
     
     MySSD300 = SSD300(n_classes = 21)
     loss_func = MultiBoxLoss(priors_cxcy = MySSD300.priors_cxcy, threshold=0.5, neg_pos_ratio=3, alpha=1.)
-    
     
     predicted_offsets = torch.randn((2,8732,4))
     predicted_scores = torch.randn((2,8732,21))
