@@ -64,6 +64,7 @@ def bbox_transform(boxes, h, w):
     boxes[:,1] /= h
     boxes[:,2] /= w
     boxes[:,3] /= h
+    return boxes
 
 def collate_fn(batch):
     """ Explaination
