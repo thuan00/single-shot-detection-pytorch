@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils import *
 from math import sqrt
 from torchvision.ops import nms
+from utils import decimate, xy_to_cxcy, cxcy_to_xy, cxcy_to_gcxgcy, gcxgcy_to_cxcy, find_jaccard_overlap
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class SSD300(nn.Module):
@@ -371,7 +371,7 @@ class MultiBoxLoss(nn.Module):
         
         # Calculating loss = alpha*loc_loss + conf_loss
         # loc_loss: localization loss
-        loc_loss = self.smooth_l1(predicted_offsets[positive_priors], truth_offsets[positive_priors], size_average=False)
+        loc_loss = self.smooth_l1(predicted_offsets[positive_priors], truth_offsets[positive_priors])
         
         # Confidence loss
         full_conf_loss = self.cross_entropy(predicted_scores.view(-1, n_classes), truth_classes.view(-1)) #(N*n_priors)
@@ -386,9 +386,9 @@ class MultiBoxLoss(nn.Module):
             conf_loss_neg,_ = full_conf_loss[i][~positive_priors[i]].sort(dim=0, descending=True) # (1-n_positives)
             conf_loss_hard_neg = conf_loss_hard_neg + conf_loss_neg[0:n_hard_negatives[i]].sum()
         
-        conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg)
+        conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg) / n_positives.sum()
 
-        return (self.alpha * loc_loss + conf_loss) / n_positives.sum()
+        return self.alpha * loc_loss + conf_loss
 
 
 if __name__ == "__main__":

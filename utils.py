@@ -10,6 +10,7 @@ import torch
 import random
 import xml.etree.ElementTree as ET
 import torchvision.transforms.functional as FT
+from sklearn.model_selection import train_test_split
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -46,10 +47,10 @@ def parse_annotation(annotation_path):
             continue
 
         bbox = object.find('bndbox')
-        xmin = float(bbox.find('xmin').text) - 1
-        ymin = float(bbox.find('ymin').text) - 1
-        xmax = float(bbox.find('xmax').text) - 1
-        ymax = float(bbox.find('ymax').text) - 1
+        xmin = int(bbox.find('xmin').text) - 1
+        ymin = int(bbox.find('ymin').text) - 1
+        xmax = int(bbox.find('xmax').text) - 1
+        ymax = int(bbox.find('ymax').text) - 1
 
         boxes.append([xmin, ymin, xmax, ymax])
         labels.append(label_map[label])
@@ -68,15 +69,15 @@ def create_data_lists(voc07_path, voc12_path, output_folder):
     """ 
     my modifications -> so that train and test set would be consistent with the paper:
     train set will include both VOC07 train-val-test set and VOC12 train-val set
-    test set is the VOC12 test set
+    test set is the VOC12 test set downloaded from http://host.robots.ox.ac.uk:8080/eval/challenges/voc2012/, 
+        which was not the real test set, containing just about 5k images, not 11k images like the original one
+    And I just discover that 5k annotations from the test set available on the url is unreliable, incomplete,
+    so we will only have train and val set, about 21k images
     """
-    #voc07_path = os.path.abspath(voc07_path)
-    #voc12_path = os.path.abspath(voc12_path)
 
     # Training data
     train_images = list()
     train_objects = list()
-    n_objects = 0
     
     # Find IDs of images in training data
     with open(os.path.join(voc07_path, 'ImageSets/Main/trainval.txt')) as f:
@@ -90,24 +91,34 @@ def create_data_lists(voc07_path, voc12_path, output_folder):
         # Parse annotation's XML file
         path = voc07_path if len(id)==6 else voc12_path  #id of voc07 imgs have len 6 only
         objects = parse_annotation(os.path.join(path, 'Annotations', id + '.xml'))
+        
         assert len(objects['labels']) > 0
-        n_objects += len(objects['labels'])
         train_objects.append(objects)
-        train_images.append(os.path.join(path, 'JPEGImages', id + '.jpg'))
+        train_images.append(os.path.join(path, 'JPEGImages/', id + '.jpg'))
 
     assert len(train_objects) == len(train_images)
-
-    # Save to file
+    
+    # Split train and val set
+    train_images, val_images, train_objects, val_objects = train_test_split(train_images, train_objects, 
+                                                                            train_size=0.8, random_state=42)
+    # Save files
     with open(os.path.join(output_folder, 'TRAIN_images.json'), 'w') as j:
         json.dump(train_images, j)
     with open(os.path.join(output_folder, 'TRAIN_objects.json'), 'w') as j:
         json.dump(train_objects, j)
+    with open(os.path.join(output_folder, 'VAL_images.json'), 'w') as j:
+        json.dump(val_images, j)
+    with open(os.path.join(output_folder, 'VAL_objects.json'), 'w') as j:
+        json.dump(val_objects, j)
     with open(os.path.join(output_folder, 'label_map.json'), 'w') as j:
-        json.dump(label_map, j)  # save label map too
-
-    print('\nThere are %d training images containing a total of %d objects. Files have been saved to %s.' % (
-        len(train_images), n_objects, output_folder))
+        json.dump(label_map, j)
     
+    print('\nThere are %d training images. Files have been saved to output_folder: %s.' % (
+        len(train_images), output_folder))
+    print('\nThere are %d validation images. Files have been saved to output_folder: %s.' % (
+        len(val_images), output_folder))
+    
+    '''
     # Test data
     test_images = list()
     test_objects = list()
@@ -120,10 +131,11 @@ def create_data_lists(voc07_path, voc12_path, output_folder):
     for id in ids:
         # Parse annotation's XML file
         objects = parse_annotation(os.path.join(voc12_path, 'Annotations', id + '.xml'))
+        
         assert len(objects['labels']) > 0
         test_objects.append(objects)
         n_objects += len(objects['labels'])
-        test_images.append(os.path.join(voc12_path, 'JPEGImages', id + '.jpg'))
+        test_images.append(os.path.join(voc12_path, 'JPEGImages/', id + '.jpg'))
 
     assert len(test_objects) == len(test_images)
 
@@ -133,9 +145,9 @@ def create_data_lists(voc07_path, voc12_path, output_folder):
     with open(os.path.join(output_folder, 'TEST_objects.json'), 'w') as j:
         json.dump(test_objects, j)
 
-    print('\nThere are %d test images containing a total of %d objects. Files have been saved to %s.' % (
+    print('\nThere are %d test images containing a total of %d objects. Files have been saved to output_folder: %s.' % (
         len(test_images), n_objects, output_folder))
-
+    '''
 
 def decimate(tensor, m):
     """
