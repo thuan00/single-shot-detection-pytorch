@@ -3,57 +3,62 @@ import json
 import torch
 import cv2
 import numpy as np
-from torch.utils.data import Dataset, DataLoader, random_split
-from torchvision import transforms
-from aug2 import SSDAugmentation
-
+from torch.utils.data import Dataset, DataLoader
+from aug import SSDAugmentation, SSDTransform
 
 class VOCDataset(Dataset):
-    def __init__(self, data_folder, is_trainset=True):
+    def __init__(self, data_folder, json_files, augment=False):
         self.root = data_folder
-        self.is_trainset = is_trainset
-        self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-        self.augment = SSDAugmentation(size=300) if is_trainset else None
+        self.transform = SSDTransform(input_size=300)
+        self.augment = SSDAugmentation(input_size=300) if augment else None
         
         self.img_paths = list()
         self.targets = list()
         
-        if self.is_trainset:
-            with open(os.path.join(self.root, 'TRAIN_images.json'), 'r') as f:
-                self.img_paths = json.load(f)
-            with open(os.path.join(self.root, 'TRAIN_objects.json'), 'r') as f:
-                self.targets = json.load(f)
-        else:# testset:
-            with open(os.path.join(self.root, 'TEST_images.json'), 'r') as f:
-                self.img_paths = json.load(f)
-            with open(os.path.join(self.root, 'TEST_objects.json'), 'r') as f:
-                self.targets = json.load(f)
+        with open(os.path.join(self.root, json_files[0]), 'r') as f:
+            self.img_paths = json.load(f)
+        with open(os.path.join(self.root, json_files[1]), 'r') as f:
+            self.targets = json.load(f)
+        assert len(self.img_paths) = len(self.targets)
     
     def __len__(self):
         return len(self.img_paths)
     
     def __getitem__(self, index):
         img = cv2.imread(self.img_paths[index])
-        h, w = img.shape[0:2]
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
+        #
         target = self.targets[index]
-        boxes = bbox_transform(np.array(target['boxes'], dtype='float32'), h, w)
-        labels = np.array(target['labels'], dtype='int32')
-        
-        if self.augment is not None:
-            img, boxes, labels = self.augment(img, boxes, labels)
-        
-        #to tensor & normalize
-        img = img[:, :, (2,1,0)] #to RGB
-        img = self.transform(img)
-        boxes = torch.from_numpy(boxes)
-        labels = torch.from_numpy(labels)
+        boxes = self.targets['boxes']
+        labels = self.targets['labels']
         diffs = torch.IntTensor(target['difficulties'])
         
+        # augmentation
+        if self.augment not None:
+            img, boxes, labels = self.augment(img, boxes, labels)
+            
+        # final transform
+        img, boxes, labels = self.transform(img, boxes, labels)
+
+        validate_aug(img, boxes)
+        
+        # to tensor & normalize
+        boxes = torch.from_numpy(boxes)
+        labels = torch.from_numpy(labels)
+        
         return img, boxes, labels, diffs
+    
+    def validate_aug(img, boxes):
+        # validate augmentation
+        im_cp = img.copy()
+        boxes_cp = np.rint(boxes.copy()*300).astype('int')
+        for box in boxes_cp.tolist():
+            #breakpoint()
+            x1, y1, x2, y2 = box
+            im_cp = cv2.rectangle(im_cp, (x1,y1), (x2,y2), (0, 255, 0), 2)
+        cv2.imwrite(f'datasets/augmented_data/'+self.img_paths[index][-15:-4]+'.png', im_cp)
+
 
 
 def bbox_transform(boxes, h, w):
@@ -93,20 +98,13 @@ def collate_fn(batch):
 
 if __name__=="__main__":
     torch.manual_seed(42)
-    trainset = VOCDataset(data_folder='datasets/', is_trainset=True)
-    train_size = int(0.9 * len(trainset))
-    val_size = len(trainset) - train_size
-    trainset, valset = random_split(trainset, [train_size, val_size])
-    #testset = VOCDataset(data_folder='datasets/', is_trainset=False)
-
+    trainset = VOCDataset(data_folder='datasets/', augmentation=True)
+    valset = VOCDataset(data_folder='datasets/', augmentation=False)
     dataloaders = dict(
-        train = DataLoader(trainset, batch_size=8, collate_fn=collate_fn, shuffle=True, num_workers=2),
-        val = DataLoader(valset, batch_size=64, collate_fn=collate_fn, shuffle=False, num_workers=2),
-        #test = DataLoader(testset, batch_size=64, collate_fn=collate_fn, shuffle=False, num_workers=2)
+        train = DataLoader(trainset, batch_size=8, collate_fn=collate_fn, shuffle=True, num_workers=4),
+        val = DataLoader(valset, batch_size=64, collate_fn=collate_fn, shuffle=False, num_workers=4),
     )
     
-    for imgs, boxes, labels,_ in dataloaders['train']:
-        print(imgs.shape)
-        print(boxes)
-        print(labels)
-        breakpoint()
+    for step, (imgs, boxes, labels,_) in enumerate(dataloaders['train']):
+        #print(imgs.shape)
+        if step == 19: break
