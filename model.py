@@ -7,7 +7,7 @@ from utils import decimate, xy_to_cxcy, cxcy_to_xy, cxcy_to_gcxgcy, gcxgcy_to_cx
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class SSD300(nn.Module):
-    def __init__(self, n_classes, vgg16_dir, checkpoint):
+    def __init__(self, n_classes, vgg16_dir=None, checkpoint=None):
         super(SSD300, self).__init__()
         self.n_classes = n_classes
         self.vgg16_dir = vgg16_dir
@@ -153,32 +153,35 @@ class SSD300(nn.Module):
         # Detection
         box_size = 4 + self.n_classes  # each box has 25 values: 4 offset values and 21 class scores
         #
-        det_fm38 = F.relu(self.det_conv4_3(fm38))
+        det_fm38 = self.det_conv4_3(fm38)
         det_fm38 = det_fm38.permute(0, 2, 3, 1).contiguous()  # (N, 38, 38, 4*box_size )
         det_fm38 = det_fm38.view(n, -1, box_size)  # (N, 5776, box_size), there are a total 5776 boxes on this feature map
         
-        det_fm19 = F.relu(self.det_conv7(fm19))
+        det_fm19 = self.det_conv7(fm19)
         det_fm19 = det_fm19.permute(0, 2, 3, 1).contiguous()  # (N, 19, 19, 6*box_size )
         det_fm19 = det_fm19.view(n, -1, box_size)  # (N, 2166, box_size), there are a total 2166 boxes on this feature map
         
-        det_fm10 = F.relu(self.det_conv8_2(fm10))
+        det_fm10 = self.det_conv8_2(fm10)
         det_fm10 = det_fm10.permute(0, 2, 3, 1).contiguous()  # (N, 10, 10, 6*box_size )
         det_fm10 = det_fm10.view(n, -1, box_size)  # (N, 600, box_size), there are a total 600 boxes on this feature map
         
-        det_fm5  = F.relu(self.det_conv9_2(fm5))
+        det_fm5  = self.det_conv9_2(fm5)
         det_fm5 = det_fm5.permute(0, 2, 3, 1).contiguous()  # (N, 5, 5, 6*box_size )
         det_fm5 = det_fm5.view(n, -1, box_size)  # (N, 150, box_size), there are a total 150 boxes on this feature map
         
-        det_fm3 = F.relu(self.det_conv10_2(fm3))
+        det_fm3 = self.det_conv10_2(fm3)
         det_fm3 = det_fm3.permute(0, 2, 3, 1).contiguous()  # (N, 3, 3, 4*box_size )
         det_fm3 = det_fm3.view(n, -1, box_size)  # (N, 36, box_size), there are a total 36 boxes on this feature map
         
-        det_fm1 = F.relu(self.det_conv11_2(fm1))
+        det_fm1 = self.det_conv11_2(fm1)
         det_fm1 = det_fm1.permute(0, 2, 3, 1).contiguous()  # (N, 1, 1, 4*box_size )
         det_fm1 = det_fm1.view(n, -1, box_size)  # (N, 4, box_size), there are a total 4 boxes on this feature map
         
         detection = torch.cat([det_fm38, det_fm19, det_fm10, det_fm5, det_fm3, det_fm1], dim=1)  # (N, 8732, box_size)
         offsets, class_scores = torch.split(detection, [4,self.n_classes], dim=2)
+        
+        # softmax
+        #class_scores = F.softmax(class_scores, dim=2)  # (N, 8732, n_classes)
         
         return offsets, class_scores
     
@@ -262,8 +265,8 @@ class SSD300(nn.Module):
         boxes = list()
         labels = list()
         scores = list()
-        
         N, n_priors = predicted_offsets.shape[0:2]
+        
         predicted_scores = F.softmax(predicted_scores, dim=2)  # (N, 8732, n_classes)
         
         # for each box, find the largest score and the class_id with respect to it
@@ -314,7 +317,7 @@ class MultiBoxLoss(nn.Module):
         self.threshold = threshold
         self.neg_pos_ratio = neg_pos_ratio
         self.alpha = alpha
-        self.smooth_l1 = nn.L1Loss()
+        self.smooth_l1 = nn.SmoothL1Loss()
         self.cross_entropy = nn.CrossEntropyLoss(reduction='none')
         
     def forward(self, predicted_offsets, predicted_scores, boxes, labels):
@@ -389,25 +392,128 @@ class MultiBoxLoss(nn.Module):
         conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg) / n_positives.sum()
 
         return self.alpha * loc_loss + conf_loss
+        
+    
+    def forward_2(self, predicted_locs, predicted_scores, boxes, labels):
+        """
+        Forward propagation.
+        :param predicted_locs: predicted locations/boxes w.r.t the 8732 prior boxes, a tensor of dimensions (N, 8732, 4)
+        :param predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8732, n_classes)
+        :param boxes: true  object bounding boxes in boundary coordinates, a list of N tensors
+        :param labels: true object labels, a list of N tensors
+        :return: multibox loss, a scalar
+        """
+        batch_size = predicted_locs.size(0)
+        n_priors = self.priors_cxcy.size(0)
+        n_classes = predicted_scores.size(2)
+
+        assert n_priors == predicted_locs.size(1) == predicted_scores.size(1)
+
+        true_locs = torch.zeros((batch_size, n_priors, 4), dtype=torch.float).to(device)  # (N, 8732, 4)
+        true_classes = torch.zeros((batch_size, n_priors), dtype=torch.long).to(device)  # (N, 8732)
+
+        # For each image
+        for i in range(batch_size):
+            n_objects = boxes[i].size(0)
+
+            overlap = find_jaccard_overlap(boxes[i],
+                                           self.priors_xy)  # (n_objects, 8732)
+
+            # For each prior, find the object that has the maximum overlap
+            overlap_for_each_prior, object_for_each_prior = overlap.max(dim=0)  # (8732)
+
+            # We don't want a situation where an object is not represented in our positive (non-background) priors -
+            # 1. An object might not be the best object for all priors, and is therefore not in object_for_each_prior.
+            # 2. All priors with the object may be assigned as background based on the threshold (0.5).
+
+            # To remedy this -
+            # First, find the prior that has the maximum overlap for each object.
+            _, prior_for_each_object = overlap.max(dim=1)  # (N_o)
+
+            # Then, assign each object to the corresponding maximum-overlap-prior. (This fixes 1.)
+            object_for_each_prior[prior_for_each_object] = torch.LongTensor(range(n_objects)).to(device)
+
+            # To ensure these priors qualify, artificially give them an overlap of greater than 0.5. (This fixes 2.)
+            overlap_for_each_prior[prior_for_each_object] = 1.
+
+            # Labels for each prior
+            label_for_each_prior = labels[i][object_for_each_prior]  # (8732)
+            # Set priors whose overlaps with objects are less than the threshold to be background (no object)
+            label_for_each_prior[overlap_for_each_prior < self.threshold] = 0  # (8732)
+
+            # Store
+            true_classes[i] = label_for_each_prior
+
+            # Encode center-size object coordinates into the form we regressed predicted boxes to
+            true_locs[i] = cxcy_to_gcxgcy(xy_to_cxcy(boxes[i][object_for_each_prior]), self.priors_cxcy)  # (8732, 4)
+
+        # Identify priors that are positive (object/non-background)
+        positive_priors = true_classes != 0  # (N, 8732)
+
+        # LOCALIZATION LOSS
+
+        # Localization loss is computed only over positive (non-background) priors
+        loc_loss = self.smooth_l1(predicted_locs[positive_priors], true_locs[positive_priors])  # (), scalar
+
+        # Note: indexing with a torch.uint8 (byte) tensor flattens the tensor when indexing is across multiple dimensions (N & 8732)
+        # So, if predicted_locs has the shape (N, 8732, 4), predicted_locs[positive_priors] will have (total positives, 4)
+
+        # CONFIDENCE LOSS
+
+        # Confidence loss is computed over positive priors and the most difficult (hardest) negative priors in each image
+        # That is, FOR EACH IMAGE,
+        # we will take the hardest (neg_pos_ratio * n_positives) negative priors, i.e where there is maximum loss
+        # This is called Hard Negative Mining - it concentrates on hardest negatives in each image, and also minimizes pos/neg imbalance
+
+        # Number of positive and hard-negative priors per image
+        n_positives = positive_priors.sum(dim=1)  # (N)
+        n_hard_negatives = self.neg_pos_ratio * n_positives  # (N)
+
+        # First, find the loss for all priors
+        conf_loss_all = self.cross_entropy(predicted_scores.view(-1, n_classes), true_classes.view(-1))  # (N * 8732)
+        conf_loss_all = conf_loss_all.view(batch_size, n_priors)  # (N, 8732)
+
+        # We already know which priors are positive
+        conf_loss_pos = conf_loss_all[positive_priors]  # (sum(n_positives))
+
+        # Next, find which priors are hard-negative
+        # To do this, sort ONLY negative priors in each image in order of decreasing loss and take top n_hard_negatives
+        conf_loss_neg = conf_loss_all.clone()  # (N, 8732)
+        conf_loss_neg[positive_priors] = 0.  # (N, 8732), positive priors are ignored (never in top n_hard_negatives)
+        conf_loss_neg, _ = conf_loss_neg.sort(dim=1, descending=True)  # (N, 8732), sorted by decreasing hardness
+        hardness_ranks = torch.LongTensor(range(n_priors)).unsqueeze(0).expand_as(conf_loss_neg).to(device)  # (N, 8732)
+        hard_negatives = hardness_ranks < n_hard_negatives.unsqueeze(1)  # (N, 8732)
+        conf_loss_hard_neg = conf_loss_neg[hard_negatives]  # (sum(n_hard_negatives))
+
+        # As in the paper, averaged over positive priors only, although computed over both positive and hard-negative priors
+        conf_loss = (conf_loss_hard_neg.sum() + conf_loss_pos.sum()) / n_positives.sum().float()  # (), scalar
+
+        # TOTAL LOSS
+        return conf_loss + self.alpha * loc_loss
 
 
 if __name__ == "__main__":
     torch.set_grad_enabled(False)
     
-    MySSD300 = SSD300(n_classes = 21)
+    MySSD300 = SSD300(n_classes = 21, vgg16_dir='models/')
     loss_func = MultiBoxLoss(priors_cxcy = MySSD300.priors_cxcy, threshold=0.5, neg_pos_ratio=3, alpha=1.)
     
-    predicted_offsets = torch.randn((2,8732,4))
-    predicted_scores = torch.randn((2,8732,21))
-    
-    boxes = [torch.Tensor([[0.1, 0.2, 0.3, 0.4]]), torch.Tensor([[0.1, 0.2, 0.3, 0.4]])]
-    labels = [torch.LongTensor([2]), torch.LongTensor([3])]
-    
-    # test loss function
-    loss = loss_func.forward(predicted_offsets, predicted_scores, boxes, labels)
-    print(loss.item())
+    for i in range(10):
+        predicted_offsets = torch.randn((2,8732,4))
+        predicted_scores = torch.randn((2,8732,21))
+
+        boxes = [torch.Tensor([[0.1, 0.2, 0.3, 0.4]]), torch.Tensor([[0.1, 0.2, 0.3, 0.4]])]
+        labels = [torch.LongTensor([2]), torch.LongTensor([3])]
+
+        # test loss function
+        loss = loss_func.forward(predicted_offsets, predicted_scores, boxes, labels)
+        print(loss.item())
+
+        loss = loss_func.forward_2(predicted_offsets, predicted_scores, boxes, labels)
+        print(loss.item())
+        print()
     
     # test detect objects
-    boxes, labels, scores = MySSD300.detect_objects(predicted_offsets, predicted_scores, score_threshold=0.6, iou_threshold=0.5)
-    breakpoint()
+    #boxes, labels, scores = MySSD300.detect_objects(predicted_offsets, predicted_scores, score_threshold=0.6, iou_threshold=0.5)
+    #breakpoint()
     
