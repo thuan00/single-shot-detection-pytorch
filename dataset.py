@@ -38,9 +38,9 @@ class VOCDataset(Dataset):
         
         # remove difficult objects if 
         if not self.keep_difficult:
-            boxes = boxes[1 - difficulties]
-            labels = labels[1 - difficulties]
-            difficulties = difficulties[1 - difficulties]
+            boxes =  [boxes[i] for i in range(len(boxes)) if not difficulties[i]]
+            labels = [labels[i] for i in range(len(boxes)) if not difficulties[i]]
+            difficulties = [difficulties[i] for i in range(len(boxes)) if not difficulties[i]]
         
         if self.augment is not None:
             img, boxes, labels = self.augment(img, boxes, labels)
