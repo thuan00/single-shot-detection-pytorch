@@ -9,9 +9,10 @@ from aug import SSDAugmentation, SSDTransform
 
 
 class VOCDataset(Dataset):
-    def __init__(self, data_folder, json_files, augment=False):
+    def __init__(self, data_folder, json_files, augment=False, keep_difficult=False):
         super(VOCDataset, self).__init__()
         self.root = data_folder
+        self.keep_difficult = keep_difficult
         self.transform = SSDTransform(size=300)
         self.augment = SSDAugmentation(size=300) if augment else None
         
@@ -33,6 +34,13 @@ class VOCDataset(Dataset):
         target = self.targets[index]
         boxes = target['boxes'].copy()
         labels = target['labels'].copy()
+        difficulties = target['difficulties'].copy()
+        
+        # remove difficult objects if 
+        if not self.keep_difficult:
+            boxes = boxes[1 - difficulties]
+            labels = labels[1 - difficulties]
+            difficulties = difficulties[1 - difficulties]
         
         if self.augment is not None:
             img, boxes, labels = self.augment(img, boxes, labels)
@@ -52,7 +60,7 @@ class VOCDataset(Dataset):
         img = torch.Tensor(img.transpose((2,0,1)))
         boxes = torch.from_numpy(bbox_transform(boxes, h=300, w=300))
         labels = torch.IntTensor(labels)
-        diffs = torch.IntTensor(target['difficulties'])
+        diffs = torch.IntTensor(difficulties)
         
         return img, boxes, labels, diffs
 
