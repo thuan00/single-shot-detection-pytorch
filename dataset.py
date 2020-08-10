@@ -31,11 +31,11 @@ class VOCDataset(Dataset):
         img = cv2.imread(self.img_paths[index])
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         target = self.targets[index]
-        boxes = target['boxes']
-        labels = target['labels']
+        boxes = target['boxes'].copy()
+        labels = target['labels'].copy()
         
         if self.augment is not None:
-            img, boxes, labels = self.augment(img, boxes.copy(), labels.copy())
+            img, boxes, labels = self.augment(img, boxes, labels)
             
         img, boxes, labels = self.transform(img, boxes, labels)
         
