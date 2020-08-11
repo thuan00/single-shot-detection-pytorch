@@ -63,7 +63,7 @@ class SSD300(nn.Module):
         if checkpoint == None:
             self.init_weights()
         else:
-            self.load_state_dict(checkpoint['model'])
+            self.load_state_dict(checkpoint['model'].state_dict())
             
         self.priors_cxcy = self.get_prior_boxes()
 
