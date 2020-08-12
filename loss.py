@@ -18,7 +18,8 @@ class MultiBoxLoss(nn.Module):
         self.cross_entropy = nn.CrossEntropyLoss(reduction='none')
         
     def match_gt_priors(self, boxes, labels):
-        ''' Given gt boxes, labels and (8732) priors, match them into the most suited priors 
+        ''' Given gt boxes, labels and (8732) priors, match them into the most suited priors
+        N: batch size
         Params:
             boxes: true object bounding boxes in boundary coordinates, (xy), a list of N tensors: N(n_objects, 4)
             labels: true object labels, a list of N tensors: N(n_objects,)
@@ -26,6 +27,9 @@ class MultiBoxLoss(nn.Module):
             truth_offsets: tensor (N, 8732, 4)
             truth_classes: tensor (N, 8732,)
         '''
+        N = len(boxes) #batch size
+        n_priors = self.priors_cxcy.size(0)
+        
         truth_offsets = torch.zeros((N, n_priors, 4), dtype=torch.float).to(device)
         truth_classes = torch.zeros((N, n_priors), dtype=torch.long).to(device)
         
