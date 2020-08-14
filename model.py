@@ -243,13 +243,13 @@ class SSD300(nn.Module):
         return prior_boxes
 
     
-    def detect_objects(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold):
-        '''
-        Decode the 8732 locations and class scores (output of ths SSD300) to detect objects.
-        For each class, perform Non-Maximum Suppression (NMS) on boxes that are above a minimum threshold.
-        Notes: 
-            The use of torch.no_grad() or torch.set_grad_enabled(False) before calling this method is recommended
-            Since this method is only called for evaluation and inference purpose so there is no need for calculating grads
+    def my_post_process_deprecated(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold):
+        ''' This approach based on my intuition that the box's class label should be the argmax of the softmax output,
+        with this approach, score_threshold is not actually used properly since max of the softmax output is usually > 0.3
+        And of course, this doesn't work well as the model's output is more biased toward class background, bc neg_pos_ratio=3
+        So in many cases, the score for backdground overwhelm other classes like for example: (0.55, 0.01, 0.45, 0.04, 0.0,...),
+        The result is that the recall is very low, it can't detect all the objects, however, precision is quite high, 
+        like probably about >95%. But still, APs and mAP is low in general.
         
         Params:
             predicted_offsets: predicted offsets w.r.t the 8732 prior boxes, (gcxgcy), a tensor of dimensions (N, 8732, 4)
@@ -257,7 +257,7 @@ class SSD300(nn.Module):
             score_threshold: minimum threshold for a box to be considered a match for a certain class
             iou_threshold: maximum overlap two boxes can have so that the one with the lower score is not suppressed via NMS
         Return: 
-            detections: (boxes, labels, and scores), lists of N tensors
+            detections: (boxes, labels, and scores), they are lists of N tensors
             boxes: N (n_boxes, 4)
             labels: N (n_boxes,)
             scores: N (n_boxes,)
@@ -272,7 +272,7 @@ class SSD300(nn.Module):
         # for each box, find the largest score and the class_id with respect to it
         class_scores, class_ids = predicted_scores.max(dim=2) # (N, 8732) and (N, 8732)
         
-        # for each unprocessed predictions in the batch:
+        # for each image in the batch
         for i in range(N):
             boxes_i = list()
             labels_i = list()
@@ -284,19 +284,18 @@ class SSD300(nn.Module):
             qualified_boxes_class = class_ids[i][qualify_mask]    # (n_qualified_boxes)
             qualified_boxes_score = class_scores[i][qualify_mask] # (n_qualified_boxes)
             
-            if len(qualified_boxes) != 0:
+            if len(qualified_boxes) > 0:
                 # convert to xy coordinates format
                 qualified_boxes = cxcy_to_xy(gcxgcy_to_cxcy(qualified_boxes, self.priors_cxcy[qualify_mask])) # (n_qualified_boxes, 4)
 
                 # Non-max suppression
                 for class_i in qualified_boxes_class.unique(sorted=False).tolist():
                     class_mask = qualified_boxes_class == class_i
-
                     boxes_class_i = qualified_boxes[class_mask]
                     boxes_score_class_i = qualified_boxes_score[class_mask]
-
+                    
                     final_box_ids = nms(boxes_class_i, boxes_score_class_i, iou_threshold)  # (n_final_boxes,)
-
+                    
                     boxes_i.extend(boxes_class_i[final_box_ids].tolist())
                     labels_i.extend([class_i]*len(final_box_ids))
                     scores_i.extend(boxes_score_class_i[final_box_ids].tolist())
@@ -308,122 +307,146 @@ class SSD300(nn.Module):
         return boxes, labels, scores
     
     
-    def detect_objects_2(self, predicted_locs, predicted_scores, min_score, max_overlap, top_k):
-        """
-        Decipher the 8732 locations and class scores (output of ths SSD300) to detect objects.
-        For each class, perform Non-Maximum Suppression (NMS) on boxes that are above a minimum threshold.
-        :param predicted_locs: predicted locations/boxes w.r.t the 8732 prior boxes, a tensor of dimensions (N, 8732, 4)
-        :param predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8732, n_classes)
-        :param min_score: minimum threshold for a box to be considered a match for a certain class
-        :param max_overlap: maximum overlap two boxes can have so that the one with the lower score is not suppressed via NMS
-        :param top_k: if there are a lot of resulting detection across all classes, keep only the top 'k'
-        :return: detections (boxes, labels, and scores), lists of length batch_size
-        """
-        batch_size = predicted_locs.size(0)
-        n_priors = self.priors_cxcy.size(0)
+    def my_post_process(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold, top_k=-1):
+        ''' The differences from the previous my_post_process are:
+        1: score_threshold is used to determine whether a box's class is background or objects
+             E.g: let's say score_threshold=0.75, then boxes that have score of background class > 0.75 are considered background
+        2: and then if the box contains an object, the object labels will be the argmax of the softmax output, background excluded
+        Result:
+        # And well, tested and it works not so well but I feel that it's better than 
+        # 2 times faster than post_process_top_k since a lot of background boxes was filtered out by score_threshold
+        '''
+        boxes = list()
+        labels = list()
+        scores = list()
+        N, n_priors = predicted_offsets.shape[0:2]
+        
         predicted_scores = F.softmax(predicted_scores, dim=2)  # (N, 8732, n_classes)
+        
+        obj_masks = (predicted_scores[:,:,0] < score_threshold) # (N,8732)
+        
+        # for each image in the batch
+        for i in range(N):
+            boxes_i = list()
+            labels_i = list()
+            scores_i = list()
+            obj_mask = obj_masks[i] # (8732)
+            
+            if obj_mask.sum().item() > 0:
+                # filter out boxes that are background
+                obj_boxes = predicted_offsets[i][obj_mask]  # (n_obj_boxes, 4) # n_obj_boxes: number of boxes containing object
+                obj_boxes_score, obj_boxes_class = predicted_scores[i,:,1:self.n_classes][obj_mask].max(dim=1) # (n_obj_boxes)
+                obj_boxes_class += 1 #since we excluded background class, argmax is between 0-19, we need to add 1 -> 1-20
 
-        # Lists to store final predicted boxes, labels, and scores for all images
-        all_images_boxes = list()
-        all_images_labels = list()
-        all_images_scores = list()
+                # convert to xy coordinates format
+                obj_boxes = cxcy_to_xy(gcxgcy_to_cxcy(obj_boxes, self.priors_cxcy[obj_mask])) # (n_qualified_boxes, 4)
 
-        assert n_priors == predicted_locs.size(1) == predicted_scores.size(1)
+                # Non-max suppression
+                for class_i in obj_boxes_class.unique(sorted=False).tolist():
+                    class_mask = (obj_boxes_class == class_i)
+                    boxes_class_i = obj_boxes[class_mask]
+                    boxes_score_class_i = obj_boxes_score[class_mask]
+                    
+                    final_box_ids = nms(boxes_class_i, boxes_score_class_i, iou_threshold)  # (n_final_boxes after suppresion,)
+                    
+                    boxes_i.extend(boxes_class_i[final_box_ids].tolist())
+                    labels_i.extend([class_i]*len(final_box_ids))
+                    scores_i.extend(boxes_score_class_i[final_box_ids].tolist())
+        
+            boxes.append(torch.FloatTensor(boxes_i).to(device))
+            labels.append(torch.LongTensor(labels_i).to(device))
+            scores.append(torch.FloatTensor(scores_i).to(device))
+            
+            # Filter top k objects that have largest confidence score
+            if boxes[i].size(0) > top_k and top_k > 0:
+                scores[i], sort_ind = scores[i].sort(dim=0, descending=True)
+                scores[i] = scores[i][:top_k]  # (top_k)
+                boxes[i] = boxes[i][sort_ind[:top_k]]  # (top_k, 4)
+                labels[i] = labels[i][sort_ind[:top_k]]  # (top_k)
+        
+        return boxes, labels, scores
+    
+    def post_process_top_k(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold, top_k):
+        ''' return top_k detections sorted by confidence score
+        Params:
+            predicted_offsets: predicted offsets w.r.t the 8732 prior boxes, (gcxgcy), a tensor of dimensions (N, 8732, 4)
+            predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8732, n_classes)
+            score_threshold: minimum threshold for a box to be considered a match for a certain class
+            iou_threshold: maximum overlap two boxes can have so that the one with the lower score is not suppressed via NMS
+            top_k: int, if the result contains more than k objects, just return k objects that have largest confidence score
+        Return:
+            detections: (boxes, labels, and scores), they are lists of N tensors
+            boxes: N (n_boxes, 4)
+            labels: N (n_boxes,)
+            scores: N (n_boxes,)
+        '''
+        boxes = list()
+        labels = list()
+        scores = list()
+        N, n_priors = predicted_offsets.shape[0:2]
+        
+        predicted_scores = F.softmax(predicted_scores, dim=2)  # (N, 8732, n_classes)
+        
+        # for each image in the batch
+        for i in range(N):
+            boxes_i = list()
+            labels_i = list()
+            scores_i = list()
+            
+            # convert gcxgcy to xy coordinates format
+            boxes_xy = cxcy_to_xy(gcxgcy_to_cxcy(predicted_offsets[i], self.priors_cxcy)) # (8732, 4)
 
-        for i in range(batch_size):
-            # Decode object coordinates from the form we regressed predicted boxes to
-            decoded_locs = cxcy_to_xy(
-                gcxgcy_to_cxcy(predicted_locs[i], self.priors_cxcy))  # (8732, 4), these are fractional pt. coordinates
-
-            # Lists to store boxes and scores for this image
-            image_boxes = list()
-            image_labels = list()
-            image_scores = list()
-
-            max_scores, best_label = predicted_scores[i].max(dim=1)  # (8732)
-
-            # Check for each class
             for c in range(1, self.n_classes):
                 # Keep only predicted boxes and scores where scores for this class are above the minimum score
                 class_scores = predicted_scores[i][:, c]  # (8732)
-                score_above_min_score = class_scores > min_score  # torch.uint8 (byte) tensor, for indexing
-                n_above_min_score = score_above_min_score.sum().item()
-                if n_above_min_score == 0:
+                qualify_mask = class_scores > score_threshold
+                n_qualified = qualify_mask.sum().item()
+                if n_qualified == 0:
                     continue
-                class_scores = class_scores[score_above_min_score]  # (n_qualified), n_min_score <= 8732
-                class_decoded_locs = decoded_locs[score_above_min_score]  # (n_qualified, 4)
+                boxes_class_c = boxes_xy[qualify_mask]  # (n_qualified, 4)
+                boxes_score_class_c = class_scores[qualify_mask]  # (n_qualified) <= 8732
+                
+                final_box_ids = nms(boxes_class_c, boxes_score_class_c, iou_threshold)  # (n_final_boxes,)
+                
+                boxes_i.extend(boxes_class_c[final_box_ids].tolist())
+                labels_i.extend([c]*len(final_box_ids))
+                scores_i.extend(boxes_score_class_c[final_box_ids].tolist())
+        
+            boxes.append(torch.FloatTensor(boxes_i).to(device))
+            labels.append(torch.LongTensor(labels_i).to(device))
+            scores.append(torch.FloatTensor(scores_i).to(device))
+            
+            # Filter top k objects that have largest confidence score
+            if boxes[i].size(0) > top_k:
+                scores[i], sort_ind = scores[i].sort(dim=0, descending=True)
+                scores[i] = scores[i][:top_k]  # (top_k)
+                boxes[i] = boxes[i][sort_ind[:top_k]]  # (top_k, 4)
+                labels[i] = labels[i][sort_ind[:top_k]]  # (top_k)
 
-                # Sort predicted boxes and scores by scores
-                class_scores, sort_ind = class_scores.sort(dim=0, descending=True)  # (n_qualified), (n_min_score)
-                class_decoded_locs = class_decoded_locs[sort_ind]  # (n_min_score, 4)
-
-                # Find the overlap between predicted boxes
-                overlap = find_jaccard_overlap(class_decoded_locs, class_decoded_locs)  # (n_qualified, n_min_score)
-
-                # Non-Maximum Suppression (NMS)
-
-                # A torch.uint8 (byte) tensor to keep track of which predicted boxes to suppress
-                # 1 implies suppress, 0 implies don't suppress
-                suppress = torch.zeros((n_above_min_score), dtype=torch.uint8).to(device)  # (n_qualified)
-
-                # Consider each box in order of decreasing scores
-                for box in range(class_decoded_locs.size(0)):
-                    # If this box is already marked for suppression
-                    if suppress[box] == 1:
-                        continue
-
-                    # Suppress boxes whose overlaps (with this box) are greater than maximum overlap
-                    # Find such boxes and update suppress indices
-                    suppress = torch.max(suppress, (overlap[box] > max_overlap).type_as(suppress))
-                    # The max operation retains previously suppressed boxes, like an 'OR' operation
-
-                    # Don't suppress this box, even though it has an overlap of 1 with itself
-                    suppress[box] = 0
-
-                # Store only unsuppressed boxes for this class
-                image_boxes.append(class_decoded_locs[1 - suppress])
-                image_labels.append(torch.LongTensor((1 - suppress).sum().item() * [c]).to(device))
-                image_scores.append(class_scores[1 - suppress])
-
-            # If no object in any class is found, store a placeholder for 'background'
-            if len(image_boxes) == 0:
-                image_boxes.append(torch.FloatTensor([[0., 0., 1., 1.]]).to(device))
-                image_labels.append(torch.LongTensor([0]).to(device))
-                image_scores.append(torch.FloatTensor([0.]).to(device))
-
-            # Concatenate into single tensors
-            image_boxes = torch.cat(image_boxes, dim=0)  # (n_objects, 4)
-            image_labels = torch.cat(image_labels, dim=0)  # (n_objects)
-            image_scores = torch.cat(image_scores, dim=0)  # (n_objects)
-            n_objects = image_scores.size(0)
-
-            # Keep only the top k objects
-            if n_objects > top_k:
-                image_scores, sort_ind = image_scores.sort(dim=0, descending=True)
-                image_scores = image_scores[:top_k]  # (top_k)
-                image_boxes = image_boxes[sort_ind][:top_k]  # (top_k, 4)
-                image_labels = image_labels[sort_ind][:top_k]  # (top_k)
-
-            # Append to lists that store predicted boxes and scores for all images
-            all_images_boxes.append(image_boxes)
-            all_images_labels.append(image_labels)
-            all_images_scores.append(image_scores)
-
-        return all_images_boxes, all_images_labels, all_images_scores  # lists of length batch_size
-
+        return boxes, labels, scores
+    
+    
+    def inference(images, score_threshold, iou_threshold, top_k):
+        ''' images: tensor size (N, 3, 300, 300), normalized
+        '''
+        predicted_offsets, predicted_scores = self.forward(images)
+        return self.post_process_top_k(predicted_offsets, predicted_scores, score_threshold, iou_threshold, top_k)
         
     
 if __name__ == "__main__":
+    from loss import MultiBoxLoss
     torch.set_grad_enabled(False)
     
-    MySSD300 = SSD300(n_classes = 21, vgg16_dir='models/')
+    #MySSD300 = SSD300(n_classes = 21, vgg16_dir='models/')
     loss_func = MultiBoxLoss(priors_cxcy = MySSD300.priors_cxcy, threshold=0.5, neg_pos_ratio=3, alpha=1.)
     
     # test loss function
-    loss = loss_func.forward(predicted_offsets, predicted_scores, boxes, labels)
-    print(loss.item())
+    #loss = loss_func.forward(predicted_offsets, predicted_scores, boxes, labels)
+    #print(loss.item())
 
     # test detect objects
     #boxes, labels, scores = MySSD300.detect_objects(predicted_offsets, predicted_scores, score_threshold=0.6, iou_threshold=0.5)
     #breakpoint()
+    
+    
     
