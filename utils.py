@@ -8,6 +8,7 @@ import json
 import os
 import torch
 import random
+import cv2
 import xml.etree.ElementTree as ET
 import torchvision.transforms.functional as FT
 from sklearn.model_selection import train_test_split
@@ -22,9 +23,11 @@ label_map['background'] = 0
 rev_label_map = {v: k for k, v in label_map.items()}  # Inverse mapping
 
 # Color map for bounding boxes of detected objects from https://sashat.me/2017/01/11/list-of-20-simple-distinct-colors/
-distinct_colors = ['#e6194b', '#3cb44b', '#ffe119', '#0082c8', '#f58231', '#911eb4', '#46f0f0', '#f032e6',
-                   '#d2f53c', '#fabebe', '#008080', '#000080', '#aa6e28', '#fffac8', '#800000', '#aaffc3', '#808000',
-                   '#ffd8b1', '#e6beff', '#808080', '#FFFFFF']
+distinct_colors = [(230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130, 48), (145, 30, 180), 
+                   (70, 240, 240), (240, 50, 230), (210, 245, 60), (250, 190, 212), (0, 128, 128), (220, 190, 255), 
+                   (170, 110, 40), (128, 0, 0), (170, 255, 195), (128, 128, 0), (255, 215, 180), (0, 0, 128), 
+                   (128, 128, 128), (255, 255, 255), (0, 0, 0)
+                  ]
 label_color_map = {k: distinct_colors[i] for i, k in enumerate(label_map.keys())}
 
 
@@ -582,3 +585,58 @@ def clip_gradient(optimizer, grad_clip):
         for param in group['params']:
             if param.grad is not None:
                 param.grad.data.clamp_(-grad_clip, grad_clip)
+
+
+def rescale_coordinates(boxes, h, w):
+    ''' Rescale the bbox coordinates to 0-1 value range
+    boxes: list (n_boxes, 4) -- (xmin, ymin, xmax, ymax) format
+    h, w: height and width of the image
+    return: tensor (n_boxes, 4)
+    '''
+    boxes = torch.FloatTensor(boxes)
+    boxes[:,0] /= w
+    boxes[:,1] /= h
+    boxes[:,2] /= w
+    boxes[:,3] /= h
+    return boxes
+
+
+def rescale_original_coordinates(boxes, h, w):
+    ''' Rescale the bbox coordinates from 0-1 value range to original value
+    boxes: tensor (n_boxes, 4) 
+    return: tensor (n_boxes, 4) -- (xmin, ymin, xmax, ymax) format
+    '''
+    boxes[:,0] *= w
+    boxes[:,1] *= h
+    boxes[:,2] *= w
+    boxes[:,3] *= h
+    return boxes
+
+
+def visualize_boxes(img, boxes, labels, thickness=2, font_thickness=1, font_scale=0.5):
+    for i, box in enumerate(boxes):
+        x_min, y_min, x_max, y_max = box
+        x_min, y_min, x_max, y_max = round(x_min), round(y_min), round(x_max), round(y_max)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        title = rev_label_map[labels[i]]
+        color = label_color_map[title]
+        
+        cv2.rectangle(img, (x_min,y_min), (x_max,y_max), color, thickness)
+        ((text_width, text_height), _) = cv2.getTextSize(title, font, font_scale, font_thickness)
+        cv2.rectangle(img, (x_min, y_min - int(1.3 * text_height)), (x_min + text_width, y_min), color, -1)
+        cv2.putText(img, title, (x_min, y_min - int(0.3 * text_height)), font, font_scale, (255,255,255), 
+                    font_thickness, lineType=cv2.LINE_AA)
+    return img
+
+
+def save_aug(img, boxes, labels, img_id):
+    ''' Save the augmented image with visualized boxes to disk 
+    #validate_aug(img, boxes, labels, self.img_paths[index][-15:-4])
+    '''
+    if '/' in img_id:
+        img_id = img_id[5:]
+    im_cp = img.copy()
+    im_cp = visualize_boxes(im_cp, boxes, label_color_map)
+    im_cp = cv2.cvtColor(im_cp, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(f'datasets/augmented_data/my_aug/'+img_id+'.png', im_cp)
+
