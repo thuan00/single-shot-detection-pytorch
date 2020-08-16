@@ -3,6 +3,37 @@ import numpy as np
 import cv2
 import random
 
+#-----------------------------
+# Transforms during test time
+#-----------------------------
+class SSDInputTransform(object):
+    ''' Input: image: numpy.ndarray in uint8
+        Output: numpy.ndarray in float32 and padding
+    '''
+    def __init__(self, size=300):
+        self.transform = A.Compose([
+            A.Resize(height=size, width=size, interpolation=cv2.INTER_LINEAR),
+            A.Normalize(),
+        ])
+        
+    def __call__(self, image):
+        # padding for slim image(h>w), so that the aspect ratio of object is not changed too much
+        # for wide image(h<w), it's acceptable to resize normally
+        padding = None
+        h, w = image.shape[0:2]
+        if h > w:
+            padding = int((h-w)/2)
+            padded_img = np.full((h,h,3), (123, 117, 104), dtype='uint8')
+            padded_img[:, padding:padding+w, :] = image
+            image = padded_img
+        # perform size and pixel value normalization
+        transformed = self.transform(image=image)
+        return transformed['image'], padding
+
+
+#---------------------------------
+# Transforms during training time
+#---------------------------------
 class SSDTransform(object):
     def __init__(self, size=300):
         self.transform = A.Compose([
@@ -11,7 +42,6 @@ class SSDTransform(object):
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels'], min_area=50))
         
     def __call__(self, image, boxes, labels):
-        # padding for slim images -> square
         h, w = image.shape[0:2]
         if h > w:
             padding = random.randint(0, h-w)
@@ -117,6 +147,7 @@ class SSDAugmentation(object):
         
         return padded_img, boxes
 
+
     
 def visualize_bboxes(img, bboxes, thickness=1):
     """Visualizes a single bounding box on the image"""
@@ -128,30 +159,6 @@ def visualize_bboxes(img, bboxes, thickness=1):
 
 if __name__ == "__main__":
     from utils import parse_annotation
-    '''
-    
-    img_path = 'datasets/s/2008_000424.jpg'
-    anno_path = 'datasets/s/2008_000424.xml'
-    
-    img = cv2.imread(img_path)
-    #img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    target = parse_annotation(anno_path)
-    
-    img = cv2.imread(img_path)
-    imgs = []
-    for i in range(100):
-        imgs.append(img)
-        
-    augment = SSDAugmentation(size=300)
-    transform = SSDTransform(size=300)
-    
-    newDatas = transform(imgs)
-    print(len(newDatas))
-
-    for i, img in enumerate(newDatas):
-        cv2.imwrite("__"+str(i)+".png", img)
-        
-    '''
     
     img_path = 'datasets/s/2008_000424.jpg'
     anno_path = 'datasets/s/2008_000424.xml'
