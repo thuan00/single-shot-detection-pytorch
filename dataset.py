@@ -3,9 +3,9 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import json
 import torch
 import cv2
-import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from aug import SSDAugmentation, SSDTransform
+from utils import rescale_coordinates, save_aug
 
 
 class VOCDataset(Dataset):
@@ -36,7 +36,7 @@ class VOCDataset(Dataset):
         labels = target['labels'].copy()
         difficulties = target['difficulties'].copy()
         
-        # remove difficult objects if 
+        # remove difficult objects if not keep_difficult
         if not self.keep_difficult:
             boxes =  [boxes[i] for i in range(len(boxes)) if not difficulties[i]]
             labels = [labels[i] for i in range(len(labels)) if not difficulties[i]]
@@ -55,41 +55,15 @@ class VOCDataset(Dataset):
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img, boxes, labels = self.augment(img, target['boxes'].copy(), target['labels'].copy(), no_crop_pad=True)
             img, boxes, labels = self.transform(img, boxes, labels)
-            
+              
         # to tensor
         img = torch.Tensor(img.transpose((2,0,1)))
-        boxes = torch.from_numpy(bbox_transform(boxes, h=300, w=300))
+        boxes = rescale_coordinates(boxes, h=img.size(1), w=img.size(2))
         labels = torch.IntTensor(labels)
         diffs = torch.IntTensor(difficulties)
         
         return img, boxes, labels, diffs
 
-
-
-def validate_aug(img, boxes, img_id):
-    #validate_aug(img, boxes, self.img_paths[index][-15:-4])
-    if '/' in img_id:
-        img_id = img_id[5:]
-    # validate augmentation
-    im_cp = img.copy()
-    for box in boxes:
-        x_min, y_min, x_max, y_max = box
-        x_min, y_min, x_max, y_max = round(x_min), round(y_min), round(x_max), round(y_max)
-        im_cp = cv2.rectangle(im_cp, (x_min,y_min), (x_max,y_max), (0, 255, 0), 1)
-    im_cp = cv2.cvtColor(im_cp, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(f'datasets/augmented_data/3/'+img_id+'.png', im_cp)
-
-def bbox_transform(boxes, h, w):
-    ''' Normalize the bbox coordinates to 0-1 format
-    boxes: list shape(n_boxes, 4)
-    return: np
-    '''
-    boxes = np.array(boxes, dtype='float32')
-    boxes[:,0] /= w
-    boxes[:,1] /= h
-    boxes[:,2] /= w
-    boxes[:,3] /= h
-    return boxes
 
 def collate_fn(batch):
     """ Explaination
@@ -127,7 +101,8 @@ if __name__=="__main__":
     
     for step, (imgs, boxes, labels,_) in enumerate(dataloaders['train']):
         #print(imgs.shape)
+        if step == 9: break
         if step % 50 == 0: print('step:', step, '- loaded imgs:', step*32)
     
-    for step, (imgs, boxes, labels,_) in enumerate(dataloaders['val']):
-        if step % 50 == 0: print('step:', step, '- loaded imgs:', step*64)
+    #for step, (imgs, boxes, labels,_) in enumerate(dataloaders['val']):
+    #    if step % 50 == 0: print('step:', step, '- loaded imgs:', step*64)
