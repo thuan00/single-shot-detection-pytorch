@@ -180,9 +180,6 @@ class SSD300(nn.Module):
         detection = torch.cat([det_fm38, det_fm19, det_fm10, det_fm5, det_fm3, det_fm1], dim=1)  # (N, 8732, box_size)
         offsets, class_scores = torch.split(detection, [4,self.n_classes], dim=2)
         
-        # softmax
-        #class_scores = F.softmax(class_scores, dim=2)  # (N, 8732, n_classes)
-        
         return offsets, class_scores
     
     
@@ -313,7 +310,7 @@ class SSD300(nn.Module):
              E.g: let's say score_threshold=0.75, then boxes that have score of background class > 0.75 are considered background
         2: and then if the box contains an object, the object labels will be the argmax of the softmax output, background excluded
         Result:
-        # And well, tested and it works not so well but I feel that it's better than 
+        # See precision recall curve for more information
         # 2 times faster than post_process_top_k since a lot of background boxes was filtered out by score_threshold
         '''
         boxes = list()
@@ -426,7 +423,7 @@ class SSD300(nn.Module):
         return boxes, labels, scores
     
     
-    def inference(images, score_threshold, iou_threshold, top_k):
+    def inference(self, images, score_threshold, iou_threshold, top_k):
         ''' images: tensor size (N, 3, 300, 300), normalized
         '''
         predicted_offsets, predicted_scores = self.forward(images)
@@ -437,16 +434,12 @@ if __name__ == "__main__":
     from loss import MultiBoxLoss
     torch.set_grad_enabled(False)
     
-    #MySSD300 = SSD300(n_classes = 21, vgg16_dir='models/')
+    MySSD300 = SSD300(n_classes = 21, vgg16_dir='models/')
     loss_func = MultiBoxLoss(priors_cxcy = MySSD300.priors_cxcy, threshold=0.5, neg_pos_ratio=3, alpha=1.)
     
-    # test loss function
     #loss = loss_func.forward(predicted_offsets, predicted_scores, boxes, labels)
     #print(loss.item())
 
     # test detect objects
     #boxes, labels, scores = MySSD300.detect_objects(predicted_offsets, predicted_scores, score_threshold=0.6, iou_threshold=0.5)
     #breakpoint()
-    
-    
-    
