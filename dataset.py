@@ -50,7 +50,6 @@ class VOCDataset(Dataset):
         # This is the case when albumentations crop or shrink all the objects and discard those with area <50px,
         # so we need to re-augment with the no_crop_pad option that ensure there is at least one obj in the image
         while self.augment and len(boxes) < 1: 
-            #print('*')
             img = cv2.imread(self.img_paths[index])
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img, boxes, labels = self.augment(img, target['boxes'].copy(), target['labels'].copy(), no_crop_pad=True)
@@ -94,15 +93,20 @@ if __name__=="__main__":
     torch.manual_seed(42)
     trainset = VOCDataset(data_folder='datasets/', json_files=('TRAIN_images.json', 'TRAIN_objects.json'), augment=True)
     valset = VOCDataset(data_folder='datasets/', json_files=('VAL_images.json', 'VAL_objects.json'))
+    
     dataloaders = dict(
-        train = DataLoader(trainset, batch_size=32, collate_fn=collate_fn, shuffle=True, num_workers=4),
-        val = DataLoader(valset, batch_size=64, collate_fn=collate_fn, shuffle=False, num_workers=4),
+        train = DataLoader(trainset, batch_size=32, collate_fn=collate_fn, shuffle=True, num_workers=2),
+        val = DataLoader(valset, batch_size=32, collate_fn=collate_fn, shuffle=False, num_workers=2),
     )
     
+    import time
+    start_time = time.time()
     for step, (imgs, boxes, labels,_) in enumerate(dataloaders['train']):
         #print(imgs.shape)
-        if step == 9: break
         if step % 50 == 0: print('step:', step, '- loaded imgs:', step*32)
+    print(time.time() - start_time)
     
-    #for step, (imgs, boxes, labels,_) in enumerate(dataloaders['val']):
-    #    if step % 50 == 0: print('step:', step, '- loaded imgs:', step*64)
+    start_time = time.time()
+    for step, (imgs, boxes, labels,_) in enumerate(dataloaders['val']):
+        if step % 10 == 0: print('step:', step, '- loaded imgs:', step*32)
+    print(time.time() - start_time)
