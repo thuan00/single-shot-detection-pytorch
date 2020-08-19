@@ -9,12 +9,12 @@ from utils import rescale_coordinates, save_aug
 
 
 class VOCDataset(Dataset):
-    def __init__(self, data_folder, json_files, augment=False, keep_difficult=False):
+    def __init__(self, data_folder, json_files, augment=False, keep_difficult=False, img_size=300):
         super(VOCDataset, self).__init__()
         self.root = data_folder
         self.keep_difficult = keep_difficult
-        self.transform = SSDTransform(size=300)
-        self.augment = SSDAugmentation(size=300) if augment else None
+        self.transform = SSDTransform(size=img_size)
+        self.augment = SSDAugmentation(size=img_size) if augment else None
         
         self.img_paths = list()
         self.targets = list()
