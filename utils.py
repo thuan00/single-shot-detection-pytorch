@@ -11,6 +11,7 @@ import random
 import cv2
 import xml.etree.ElementTree as ET
 import torchvision.transforms.functional as FT
+from math import sqrt
 from sklearn.model_selection import train_test_split
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -640,3 +641,60 @@ def save_aug(img, boxes, labels, img_id):
     im_cp = cv2.cvtColor(im_cp, cv2.COLOR_RGB2BGR)
     cv2.imwrite(f'datasets/augmented_data/my_aug/'+img_id+'.png', im_cp)
 
+
+def create_prior_boxes(fmap_dims, obj_scales, aspect_ratios, last_scale):
+    ''' Create the prior (default) boxes for the SSD300, as defined in the paper.
+    Params: For examples, parameters for this functions should be like as the following
+        fmap_dims = {'conv4_3': 38,
+                 'conv7': 19,
+                 'conv8_2': 10,
+                 'conv9_2': 5,
+                 'conv10_2': 3,
+                 'conv11_2': 1}
+
+        obj_scales = {'conv4_3': 0.1,
+                      'conv7': 0.2,
+                      'conv8_2': 0.375,
+                      'conv9_2': 0.55,
+                      'conv10_2': 0.725,
+                      'conv11_2': 0.9}
+
+        aspect_ratios = {'conv4_3': [1., 2., 0.5],
+                         'conv7': [1., 2., 3., 0.5, .333],
+                         'conv8_2': [1., 2., 3., 0.5, .333],
+                         'conv9_2': [1., 2., 3., 0.5, .333],
+                         'conv10_2': [1., 2., 0.5],
+                         'conv11_2': [1., 2., 0.5]}
+        last_scale = 1
+        
+    Return: 
+        prior boxes in center-size coordinates, a tensor of dimensions (n_prior, 4)
+    '''
+    
+    fmaps = list(fmap_dims.keys())
+    prior_boxes = []
+
+    for k, fmap in enumerate(fmaps):
+        dim = fmap_dims[fmap]
+        for i in range(dim):
+            for j in range(dim):
+                cx = (j + 0.5) / dim
+                cy = (i + 0.5) / dim
+
+                s = obj_scales[fmap]
+                for ratio in aspect_ratios[fmap]:
+                    w = s * sqrt(ratio)
+                    h = s / sqrt(ratio)
+                    prior_boxes.append([cx, cy, w, h])
+
+                # an additional prior box:
+                if k < len(fmaps)-1:
+                    additional_scale = sqrt(s * obj_scales[fmaps[k + 1]])
+                else:
+                    additional_scale = last_scale
+                prior_boxes.append([cx, cy, additional_scale, additional_scale])
+
+    prior_boxes = torch.FloatTensor(prior_boxes).to(device)
+    prior_boxes.clamp_(min=0, max=1)
+
+    return prior_boxes

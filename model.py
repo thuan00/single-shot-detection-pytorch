@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from math import sqrt
 from torchvision.ops import nms
-from utils import decimate, xy_to_cxcy, cxcy_to_xy, cxcy_to_gcxgcy, gcxgcy_to_cxcy, find_jaccard_overlap
+from utils import decimate, cxcy_to_xy, gcxgcy_to_cxcy, create_prior_boxes
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class SSD300(nn.Module):
@@ -209,35 +208,8 @@ class SSD300(nn.Module):
                          'conv9_2': [1., 2., 3., 0.5, .333],
                          'conv10_2': [1., 2., 0.5],
                          'conv11_2': [1., 2., 0.5]}
-
-        fmaps = list(fmap_dims.keys())
-        prior_boxes = []
         
-        for k, fmap in enumerate(fmaps):
-            dim = fmap_dims[fmap]
-            for i in range(dim):
-                for j in range(dim):
-                    cx = (j + 0.5) / dim
-                    cy = (i + 0.5) / dim
-                    
-                    s = obj_scales[fmap]
-                    for ratio in aspect_ratios[fmap]:
-                        w = s * sqrt(ratio)
-                        h = s / sqrt(ratio)
-                        prior_boxes.append([cx, cy, w, h])
-                        
-                    # an additional prior box:
-                    if dim > 1:
-                        additional_scale = sqrt(s * obj_scales[fmaps[k + 1]])
-                    else:
-                        additional_scale = 1
-                    prior_boxes.append([cx, cy, additional_scale, additional_scale])
-        
-        prior_boxes = torch.FloatTensor(prior_boxes).to(device)
-        prior_boxes.clamp_(min=0, max=1)
-        assert prior_boxes.shape == (8732,4)
-        
-        return prior_boxes
+        return create_prior_boxes(fmap_dims, obj_scales, aspect_ratios, last_scale=1)
 
     
     def my_post_process_deprecated(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold):
