@@ -10,7 +10,30 @@ from model import SSD300
 from utils import visualize_boxes, rescale_original_coordinates
 device = torch.device("cuda" if cuda.is_available() else "cpu") 
 
+#---------------------
+# Options
+checkpoint_paths = {
+    'ssd300': 'models/checkpoint_ssd300.pt',
+    'ssdlite': 'models/ssd_mobilenetv2.pt',
+    'ssdeff': 'model/ssd_efficient_net_fpn_focalloss.pt'
+}
+
+input_size = {
+    'ssd300': 300,
+    'ssdlite': 320,
+    'ssdeff': 300
+}
+
+# Detection arguments
+score_threshold=0.39
+iou_threshold=0.45
+top_k=100
+
+
+#-----------------------------
+# Arg parser
 ap = argparse.ArgumentParser()
+ap.add_argument("-m", "--model", required=False, help="model's name, can be either 'ssd300','ssdlite','ssdeff'")
 ap.add_argument("-i", "--input-img", required=False, help="path to the image to be detected")
 ap.add_argument("-d", "--input-dir", required=False, help="path to the directory contains images to be detected")
 ap.add_argument("-o", "--output", required=True, help="path to the output folder")
@@ -20,19 +43,16 @@ args = vars(ap.parse_args())
 if (args['input_img'] != None) + (args['input_dir'] != None) != 1:
     raise Exception("Please provide just one of the two --input-img or --input-dir argument")
 
-# Load model
-checkpoint_path = 'models/checkpoint_ssd300.pt'
-checkpoint = torch.load(checkpoint_path, map_location=device)
-MySSD300 = checkpoint['model'].to(device)
-MySSD300.eval()
 
-# Detection arguments
-score_threshold=0.36
-iou_threshold=0.45
-top_k=100
+# Load model
+model_name = args['model']
+checkpoint = torch.load(checkpoint_paths[model_name], map_location=device)
+model = checkpoint['model'].to(device)
+model.eval()
 
 # Input transform
-input_transform = SSDInputTransform(size=300)
+input_transform = SSDInputTransform(size=input_size[model_name])
+
 
 def detect_objects(img, score_threshold, iou_threshold, top_k):
     ''' 
@@ -46,7 +66,9 @@ def detect_objects(img, score_threshold, iou_threshold, top_k):
     img_data = torch.from_numpy(img_data.transpose((2,0,1))).unsqueeze(0).to(device) #(1,3,300,300)
     
     # inference
-    boxes, labels,_ = MySSD300.inference(img_data, score_threshold, iou_threshold, top_k)
+    predicted_offsets, predicted_scores = model(img_data)
+    boxes, labels, scores = model.post_process_top_k(predicted_offsets, predicted_scores,
+                                                     score_threshold, iou_threshold, top_k)
     assert (len(boxes) == 1) and (len(labels) == 1) #since batch of size 1 so the output should be a list with 1 element
     
     # output refinement
@@ -69,6 +91,7 @@ def detect_objects(img, score_threshold, iou_threshold, top_k):
 
 def detect_batch(img, score_threshold, iou_threshold, top_k):
     return
+
 
 @torch.no_grad()
 def main():
