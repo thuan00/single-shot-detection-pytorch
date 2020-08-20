@@ -1,13 +1,44 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from model import SSD300
-from utils import decimate, xy_to_cxcy, cxcy_to_xy, cxcy_to_gcxgcy, gcxgcy_to_cxcy, find_jaccard_overlap
+from utils import decimate, xy_to_cxcy, cxcy_to_xy, cxcy_to_gcxgcy, find_jaccard_overlap
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2, alpha=None, size_average=True):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        if isinstance(alpha,(float)): 
+            self.alpha = torch.Tensor([alpha,1-alpha]).to(device)
+        if isinstance(alpha,list): 
+            self.alpha = torch.Tensor(alpha).to(device)
+        self.size_average = size_average
+
+    def forward(self, input, target):
+        ''' Input contraints are the same as CrossEntropyLoss, documented on pytorch docs
+        input:  (N, C)
+        target: (N, 1)
+        '''
+        logpt = F.log_softmax(input, dim=1)
+        logpt = logpt.gather(1, target)
+        logpt = logpt.view(-1)
+        pt = logpt.data.exp()
+
+        if self.alpha is not None:
+            if self.alpha.type() != input.data.type():
+                self.alpha = self.alpha.type_as(input.data)
+            at = self.alpha.gather(0, target.data.view(-1))
+            logpt = logpt * at
+
+        loss = -1 * (1-pt)**self.gamma * logpt
+        
+        return loss.mean() if self.size_average else loss.sum()
+
+
 class MultiBoxLoss(nn.Module):
-    def __init__(self, priors_cxcy, threshold=0.5, neg_pos_ratio=3, alpha=1.):
+    def __init__(self, priors_cxcy, threshold=0.5, neg_pos_ratio=3, alpha=1., focal_loss=False):
         super(MultiBoxLoss, self).__init__()
         self.priors_cxcy = priors_cxcy
         self.priors_xy = cxcy_to_xy(priors_cxcy)
@@ -16,6 +47,7 @@ class MultiBoxLoss(nn.Module):
         self.alpha = alpha
         self.smooth_l1 = nn.SmoothL1Loss()
         self.cross_entropy = nn.CrossEntropyLoss(reduction='none')
+        self.focal_loss = FocalLoss() if focal_loss else None
         
     def match_gt_priors(self, boxes, labels):
         ''' Given gt boxes, labels and (8732) priors, match them into the most suited priors
@@ -89,26 +121,29 @@ class MultiBoxLoss(nn.Module):
         loc_loss = self.smooth_l1(predicted_offsets[positive_priors], truth_offsets[positive_priors])
         
         # Confidence loss
-        full_conf_loss = self.cross_entropy(predicted_scores.view(-1, n_classes), truth_classes.view(-1)) #(N*n_priors)
-        full_conf_loss = full_conf_loss.view(N, n_priors)
-        # Since there is a huge unbalance between positive and negative priors so we only take the loss of the hard negative priors
+        if self.focal_loss is not None:
+            conf_loss = self.focal_loss(predicted_scores.view(-1, n_classes), truth_classes.view(-1,1))
+        else:# Hard negative mining
+            full_conf_loss = self.cross_entropy(predicted_scores.view(-1, n_classes), truth_classes.view(-1)) #(N*n_priors)
+            full_conf_loss = full_conf_loss.view(N, n_priors)
+            # Since there is a huge unbalance between positive and negative priors so we only take the loss of the hard negatives
 
-        # Hard negative mining
-        n_hard_negatives = self.neg_pos_ratio * n_positives  # (N)
-        conf_loss_hard_neg = 0
-        # accummulate conf_loss_hard_neg for each sample in batch
-        for i in range(N):
-            conf_loss_neg,_ = full_conf_loss[i][~positive_priors[i]].sort(dim=0, descending=True) # (1-n_positives)
-            conf_loss_hard_neg = conf_loss_hard_neg + conf_loss_neg[0:n_hard_negatives[i]].sum()
+            n_hard_negatives = self.neg_pos_ratio * n_positives  # (N)
+            conf_loss_hard_neg = 0
+            # accummulate conf_loss_hard_neg for each sample in batch
+            for i in range(N):
+                conf_loss_neg,_ = full_conf_loss[i][~positive_priors[i]].sort(dim=0, descending=True) # (1-n_positives)
+                conf_loss_hard_neg = conf_loss_hard_neg + conf_loss_neg[0:n_hard_negatives[i]].sum()
+
+            conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg) / n_positives.sum()
         
-        conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg) / n_positives.sum()
-
         return self.alpha * loc_loss + conf_loss
 
 
 if __name__ == "__main__":
     torch.set_grad_enabled(False)
     
+    from model import SSD300
     loss_func = MultiBoxLoss(priors_cxcy = SSD300.get_priors_cxcy(), threshold=0.5, neg_pos_ratio=3, alpha=1.)
     
     # test loss function
