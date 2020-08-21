@@ -49,12 +49,11 @@ class InvertedResidual(nn.Module):
 
 
 class MobileNetV2(nn.Module):
-    def __init__(self, width_mult=1.0, inverted_residual_setting=None, pretrained=True):
+    def __init__(self, width_mult=1.0, last_channel=1280, inverted_residual_setting=None, pretrained=True):
         super(MobileNetV2, self).__init__()
         self.pretrained = pretrained
         block = InvertedResidual
         input_channel = 32
-        last_channel = 1280
 
         if inverted_residual_setting is None:
             inverted_residual_setting = [
@@ -77,6 +76,7 @@ class MobileNetV2(nn.Module):
         input_channel = int(input_channel * width_mult)
         self.last_channel = int(last_channel * max(1.0, width_mult))
         features = [ConvBNReLU(3, input_channel, stride=2)]
+        
         # building inverted residual blocks
         for t, c, n, s in inverted_residual_setting:
             output_channel = int(c * width_mult)
@@ -84,20 +84,22 @@ class MobileNetV2(nn.Module):
                 stride = s if i == 0 else 1
                 features.append(block(input_channel, output_channel, stride, expand_ratio=t))
                 input_channel = output_channel
+                
         # building last several layers
         features.append(ConvBNReLU(input_channel, self.last_channel, kernel_size=1))
+        
         # make it nn.Sequential
         self.features = nn.Sequential(*features)
         self.extras = nn.ModuleList([
-            InvertedResidual(1280, 512, 2, 0.2),
+            InvertedResidual(last_channel, 512, 2, 0.2),
             InvertedResidual(512, 256, 2, 0.25),
         ])
 
+        self.reset_parameters()
         if self.pretrained:
             pretrained_weights = torch.hub.load_state_dict_from_url(model_urls['mobilenet_v2'], model_dir='models/')
             self.load_state_dict(pretrained_weights, strict=False)
-        else:
-            self.reset_parameters()
+            
 
     def reset_parameters(self):
         # weight initialization
@@ -138,6 +140,8 @@ class SSDLite(nn.Module):
         self.backbone = MobileNetV2()
         
         # Detection layers 
+        # Original SSDLite uses SeperableConvolution as detector layers, which is more efficient
+        # However, I'll just gonna use basic Conv for simplicity and neglect speed performance
         self.det_fm20 = nn.Conv2d(96, 6*(4+n_classes), kernel_size=3, padding=1)
         self.det_fm10 = nn.Conv2d(1280, 6*(4+n_classes), kernel_size=3, padding=1)
         self.det_fm5 = nn.Conv2d(512, 6*(4+n_classes), kernel_size=3, padding=1)
