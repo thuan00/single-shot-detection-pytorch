@@ -78,7 +78,7 @@ class SSDEff(nn.Module):
         n = x.size(0)
         
         # Bottom-up
-        fm38, fm19, fm10 = self.backbone(x)
+        fm38, fm19, fm10 = self.backbone.extract_feature_maps(x)
         fm5 = self.extras[0](fm10)
         fm3 = self.extras[1](fm5)
         
