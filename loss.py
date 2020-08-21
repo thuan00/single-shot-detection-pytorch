@@ -6,35 +6,28 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2, alpha=None, size_average=True):
+    def __init__(self, gamma=2, alpha=0.25, reduction='sum'):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
         self.alpha = alpha
-        if isinstance(alpha,(float)): 
-            self.alpha = torch.Tensor([alpha,1-alpha]).to(device)
-        if isinstance(alpha,list): 
-            self.alpha = torch.Tensor(alpha).to(device)
-        self.size_average = size_average
-
-    def forward(self, input, target):
-        ''' Input contraints are the same as CrossEntropyLoss, documented on pytorch docs
-        input:  (N, C)
-        target: (N, 1)
+        self.reduction = reduction
+    
+    def forward(self, x, y):
+        ''' 
+        x: (N, C)
+        y: (N,)
         '''
-        logpt = F.log_softmax(input, dim=1)
-        logpt = logpt.gather(1, target)
-        logpt = logpt.view(-1)
-        pt = logpt.data.exp()
-
-        if self.alpha is not None:
-            if self.alpha.type() != input.data.type():
-                self.alpha = self.alpha.type_as(input.data)
-            at = self.alpha.gather(0, target.data.view(-1))
-            logpt = logpt * at
-
-        loss = -1 * (1-pt)**self.gamma * logpt
+        n_classes = x.size(1)
         
-        return loss.mean() if self.size_average else loss.sum()
+        # Convert y to one hot embedding 
+        t = torch.eye(n_classes).to(device)[y] # (N,21)
+
+        p = x.sigmoid()
+        pt = p*t + (1-p)*(1-t)
+        w = self.alpha*t + (1-self.alpha)*(1-t)
+        w = w * (1-pt).pow(self.gamma)
+        
+        return F.binary_cross_entropy_with_logits(x, t, w.detach_(), reduction=self.reduction)
 
 
 class MultiBoxLoss(nn.Module):
@@ -45,9 +38,11 @@ class MultiBoxLoss(nn.Module):
         self.threshold = threshold
         self.neg_pos_ratio = neg_pos_ratio
         self.alpha = alpha
+        
+        # loss functions
         self.smooth_l1 = nn.SmoothL1Loss()
         self.cross_entropy = nn.CrossEntropyLoss(reduction='none')
-        self.focal_loss = FocalLoss() if focal_loss else None
+        self.focal_loss = FocalLoss(reduction='sum') if focal_loss else None
         
     def match_gt_priors(self, boxes, labels):
         ''' Given gt boxes, labels and (8732) priors, match them into the most suited priors
@@ -76,8 +71,7 @@ class MultiBoxLoss(nn.Module):
             # for each object, find the most suited prior id
             _, object_prior = overlap.max(dim=0) #(n_objects)
             # for each object, assign its most suited prior with object id 
-            #for j in range(n_objects): prior_obj[object_prior[j]] = j
-            prior_obj[object_prior] = torch.LongTensor(range(n_objects)).to(device)
+            for j in range(n_objects): prior_obj[object_prior[j]] = j
             # for each object, assign its most suited prior with hight iou to ensure it qualifies the thresholding 
             prior_iou[object_prior] = 1.
             
@@ -114,7 +108,7 @@ class MultiBoxLoss(nn.Module):
         
         # Now we have ground truth priors and predicted priors we can now calculate the loss
         positive_priors = (truth_classes != 0) #(N,8732)
-        n_positives = positive_priors.sum(dim=1)  # (N)
+        n_positives = positive_priors.sum()  # (1)
         
         # Calculating loss = alpha*loc_loss + conf_loss
         # loc_loss: localization loss
@@ -122,30 +116,37 @@ class MultiBoxLoss(nn.Module):
         
         # Confidence loss
         if self.focal_loss is not None:
-            conf_loss = self.focal_loss(predicted_scores.view(-1, n_classes), truth_classes.view(-1,1))
+            conf_loss = self.focal_loss(predicted_scores.view(-1, n_classes), truth_classes.view(-1)) / n_positives
         else:# Hard negative mining
             full_conf_loss = self.cross_entropy(predicted_scores.view(-1, n_classes), truth_classes.view(-1)) #(N*n_priors)
             full_conf_loss = full_conf_loss.view(N, n_priors)
             # Since there is a huge unbalance between positive and negative priors so we only take the loss of the hard negatives
 
-            n_hard_negatives = self.neg_pos_ratio * n_positives  # (N)
+            n_hard_negatives = self.neg_pos_ratio * positive_priors.sum(dim=1)  # (N)
             conf_loss_hard_neg = 0
             # accummulate conf_loss_hard_neg for each sample in batch
             for i in range(N):
-                conf_loss_neg,_ = full_conf_loss[i][~positive_priors[i]].sort(dim=0, descending=True) # (1-n_positives)
+                conf_loss_neg,_ = full_conf_loss[i][~positive_priors[i]].sort(dim=0, descending=True)
                 conf_loss_hard_neg = conf_loss_hard_neg + conf_loss_neg[0:n_hard_negatives[i]].sum()
 
-            conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg) / n_positives.sum()
+            conf_loss = (full_conf_loss[positive_priors].sum() + conf_loss_hard_neg) / n_positives
         
+        #print(loc_loss.item(), conf_loss.item())
         return self.alpha * loc_loss + conf_loss
 
 
 if __name__ == "__main__":
     torch.set_grad_enabled(False)
     
-    from model import SSD300
-    loss_func = MultiBoxLoss(priors_cxcy = SSD300.get_priors_cxcy(), threshold=0.5, neg_pos_ratio=3, alpha=1.)
+    predicted_offsets = torch.rand((1,3204,4))
+    predicted_scores = torch.rand((1,3204,21))
+    gt_boxes = [torch.Tensor([[0.1, 0.2, 0.3, 0.4]])]
+    gt_labels = [torch.LongTensor([1])]
+    
+    from ssdLite import SSDLite
+    model = SSDLite(n_classes=21)
+    loss_func = MultiBoxLoss(priors_cxcy = model.get_prior_boxes(), threshold=0.5, neg_pos_ratio=3, alpha=1.)
     
     # test loss function
-    loss = loss_func.forward(predicted_offsets, predicted_scores, boxes, labels)
+    loss = loss_func.forward(predicted_offsets, predicted_scores, gt_boxes, gt_labels)
     print(loss.item())
