@@ -91,7 +91,7 @@ class MobileNetV2(nn.Module):
         # make it nn.Sequential
         self.features = nn.Sequential(*features)
         self.extras = nn.ModuleList([
-            InvertedResidual(last_channel, 512, 2, 0.2),
+            InvertedResidual(self.last_channel, 512, 2, 0.2),
             InvertedResidual(512, 256, 2, 0.25),
         ])
 
