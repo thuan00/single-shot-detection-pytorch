@@ -27,7 +27,7 @@ rev_label_map = {v: k for k, v in label_map.items()}  # Inverse mapping
 distinct_colors = [(230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130, 48), (145, 30, 180), 
                    (70, 240, 240), (240, 50, 230), (210, 245, 60), (250, 190, 212), (0, 128, 128), (220, 190, 255), 
                    (170, 110, 40), (128, 0, 0), (170, 255, 195), (128, 128, 0), (255, 215, 180), (0, 0, 128), 
-                   (128, 128, 128), (255, 255, 255), (0, 0, 0)
+                   (128, 128, 128), (0, 0, 0), (255, 255, 255)
                   ]
 label_color_map = {k: distinct_colors[i] for i, k in enumerate(label_map.keys())}
 
@@ -632,12 +632,12 @@ def visualize_boxes(img, boxes, labels, thickness=2, font_thickness=1, font_scal
 
 def save_aug(img, boxes, labels, img_id):
     ''' Save the augmented image with visualized boxes to disk 
-    #validate_aug(img, boxes, labels, self.img_paths[index][-15:-4])
+    #save_aug(img, boxes, labels, os.path.basename(self.img_paths[index]))
     '''
     if '/' in img_id:
         img_id = img_id[5:]
     im_cp = img.copy()
-    im_cp = visualize_boxes(im_cp, boxes, label_color_map)
+    im_cp = visualize_boxes(im_cp, boxes, labels)
     im_cp = cv2.cvtColor(im_cp, cv2.COLOR_RGB2BGR)
     cv2.imwrite(f'datasets/augmented_data/my_aug/'+img_id+'.png', im_cp)
 
