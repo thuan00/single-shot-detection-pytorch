@@ -13,6 +13,7 @@ class VOCDataset(Dataset):
         super(VOCDataset, self).__init__()
         self.root = data_folder
         self.keep_difficult = keep_difficult
+        self.img_size = img_size
         self.transform = SSDTransform(size=img_size)
         self.augment = SSDAugmentation(size=img_size) if augment else None
         
@@ -24,44 +25,49 @@ class VOCDataset(Dataset):
         with open(os.path.join(self.root, json_files[1]), 'r') as f:
             self.targets = json.load(f)
         assert len(self.img_paths) == len(self.targets)
+        
+        if not self.keep_difficult:
+            self.remove_difficult_objs()
     
     def __len__(self):
         return len(self.img_paths)
     
+    def remove_difficult_objs(self):
+        for target in self.targets:
+            boxes = target['boxes']
+            labels = target['labels']
+            difficulties = target['difficulties']
+            
+            # remove difficult objects if not keep_difficult
+            boxes =  [boxes[i] for i in range(len(boxes)) if not difficulties[i]]
+            labels = [labels[i] for i in range(len(labels)) if not difficulties[i]]
+    
     def __getitem__(self, index):
-        img = cv2.imread(self.img_paths[index])
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = self.read_img(index)
         target = self.targets[index]
         boxes = target['boxes'].copy()
         labels = target['labels'].copy()
-        difficulties = target['difficulties'].copy()
-        
-        # remove difficult objects if not keep_difficult
-        if not self.keep_difficult:
-            boxes =  [boxes[i] for i in range(len(boxes)) if not difficulties[i]]
-            labels = [labels[i] for i in range(len(labels)) if not difficulties[i]]
-            difficulties = [difficulties[i] for i in range(len(difficulties)) if not difficulties[i]]
         
         if self.augment is not None:
             img, boxes, labels = self.augment(img, boxes, labels)
+            if len(boxes) < 1: 
+                # This is the case when albumentations crop or shrink all the objects and discard all of them
+                # So in this case(~0.5%), no augmentation will be done.
+                img, boxes, labels = self.read_img(index), target['boxes'].copy(), target['labels'].copy()
             
         img, boxes, labels = self.transform(img, boxes, labels)
-        
-        # This is the case when albumentations crop or shrink all the objects and discard those with area <50px,
-        # so we need to re-augment with the no_crop_pad option that ensure there is at least one obj in the image
-        while self.augment and len(boxes) < 1: 
-            img = cv2.imread(self.img_paths[index])
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img, boxes, labels = self.augment(img, target['boxes'].copy(), target['labels'].copy(), no_crop_pad=True)
-            img, boxes, labels = self.transform(img, boxes, labels)
-              
+            
+        #save_aug(img, boxes, labels, os.path.basename(self.img_paths[index]))
         # to tensor
         img = torch.Tensor(img.transpose((2,0,1)))
         boxes = rescale_coordinates(boxes, h=img.size(1), w=img.size(2))
         labels = torch.IntTensor(labels)
-        diffs = torch.IntTensor(difficulties)
         
-        return img, boxes, labels, diffs
+        return img, boxes, labels
+    
+    def read_img(self, index):
+        ''' read the image and convert to RGB '''
+        return cv2.cvtColor(cv2.imread(self.img_paths[index]), cv2.COLOR_BGR2RGB)
 
 
 def collate_fn(batch):
@@ -76,17 +82,15 @@ def collate_fn(batch):
     batch_imgs = list()
     batch_boxes = list()
     batch_labels = list()
-    batch_diffs = list()
 
-    for imgs, boxes, labels, diffs in batch:
+    for imgs, boxes, labels in batch:
         batch_imgs.append(imgs)
         batch_boxes.append(boxes)
         batch_labels.append(labels)
-        batch_diffs.append(diffs)
 
     batch_imgs = torch.stack(batch_imgs, dim=0)
 
-    return batch_imgs, batch_boxes, batch_labels, batch_diffs  # tensor(N, 3, 300, 300) and 2 lists of N tensors each
+    return batch_imgs, batch_boxes, batch_labels  # tensor(N, 3, 300, 300) and 2 lists of N tensors each
 
 
 if __name__=="__main__":
@@ -101,12 +105,12 @@ if __name__=="__main__":
     
     import time
     start_time = time.time()
-    for step, (imgs, boxes, labels,_) in enumerate(dataloaders['train']):
+    for step, (imgs, boxes, labels) in enumerate(dataloaders['train']):
         #print(imgs.shape)
         if step % 50 == 0: print('step:', step, '- loaded imgs:', step*32)
     print(time.time() - start_time)
     
     start_time = time.time()
-    for step, (imgs, boxes, labels,_) in enumerate(dataloaders['val']):
+    for step, (imgs, boxes, labels) in enumerate(dataloaders['val']):
         if step % 10 == 0: print('step:', step, '- loaded imgs:', step*32)
     print(time.time() - start_time)
