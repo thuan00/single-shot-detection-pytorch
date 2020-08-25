@@ -38,7 +38,7 @@ class SSDTransform(object):
     def __init__(self, size=300):
         self.transform = A.Compose([
             A.Resize(height=size, width=size, interpolation=cv2.INTER_AREA),
-            #A.Normalize(),
+            A.Normalize(),
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
         
     def __call__(self, image, boxes, labels):
