@@ -6,7 +6,6 @@ import torch.cuda as cuda
 import cv2
 import argparse
 from aug import SSDInputTransform
-from model import SSD300
 from utils import visualize_boxes, rescale_original_coordinates
 device = torch.device("cuda" if cuda.is_available() else "cpu") 
 
@@ -15,23 +14,27 @@ device = torch.device("cuda" if cuda.is_available() else "cpu")
 checkpoint_paths = {
     'ssd300': 'models/checkpoint_ssd300.pt',
     'ssdlite': 'models/ssd_mobilenetv2.pt',
-    'ssdeff': 'model/ssd_efficient_net_fpn_focalloss.pt'
+    'ssdeff': 'models/ssd_efficientnet_b3.pt'
 }
 
-input_size = {
+input_sizes = {
     'ssd300': 300,
     'ssdlite': 320,
     'ssdeff': 300
 }
 
-# Detection arguments
-score_threshold=0.39
+score_thresholds = {
+    'ssd300': 0.36,
+    'ssdlite': 0.39,
+    'ssdeff': 0.5
+}
 iou_threshold=0.45
 top_k=100
 
 
 #-----------------------------
 # Arg parser
+# sample cmd: python test.py -m ssdeff -d datasets/samples/ -o results/ssdeff_sample_detection/
 ap = argparse.ArgumentParser()
 ap.add_argument("-m", "--model", required=False, help="model's name, can be either 'ssd300','ssdlite','ssdeff'")
 ap.add_argument("-i", "--input-img", required=False, help="path to the image to be detected")
@@ -44,17 +47,23 @@ if (args['input_img'] != None) + (args['input_dir'] != None) != 1:
     raise Exception("Please provide just one of the two --input-img or --input-dir argument")
 
 
-# Load model
+# Detection arguments
 model_name = args['model']
-checkpoint = torch.load(checkpoint_paths[model_name], map_location=device)
+checkpoint_path = checkpoint_paths[model_name]
+input_size = input_sizes[model_name]
+score_threshold = score_thresholds[model_name]
+    
+
+# Load model
+checkpoint = torch.load(checkpoint_path, map_location=device)
 model = checkpoint['model'].to(device)
 model.eval()
 
-# Input transform
-input_transform = SSDInputTransform(size=input_size[model_name])
+# Specify Input transform
+input_transform = SSDInputTransform(size=input_size)
 
 
-def detect_objects(img, score_threshold, iou_threshold, top_k):
+def detect_single_img(img, score_threshold, iou_threshold, top_k):
     ''' 
     img: a single image in numpy.ndarray format, (h, w, c)
     other args: see model.py's post processing functions for more information
@@ -100,7 +109,7 @@ def main():
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
         start_time = time.time()
-        img = detect_objects(img, score_threshold, iou_threshold, top_k)
+        img = detect_single_img(img, score_threshold, iou_threshold, top_k)
         end_time = time.time() - start_time
         print(f'Done in {end_time:.3f}s')
         
@@ -117,7 +126,7 @@ def main():
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
             start_time = time.time()
-            img = detect_objects(img, score_threshold, iou_threshold, top_k)
+            img = detect_single_img(img, score_threshold, iou_threshold, top_k)
             running_time = time.time() - start_time
             total_time += running_time
 
