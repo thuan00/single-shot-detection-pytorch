@@ -22,7 +22,6 @@ def add_extras(cfgs):
         for params in cfg:
             in_channels, out_channels, kernel_size, stride, padding = params
             extra.append(nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding))
-            extra.append(nn.BatchNorm2d(in_channels))
             extra.append(nn.ReLU())
         extras.append(nn.Sequential(*extra))
     return extras
@@ -44,6 +43,7 @@ class SSDEff(nn.Module):
         fm3: N, 256, 3, 3
         '''
         
+        '''
         # FPN Lateral layers
         self.lat_fm19 = nn.Conv2d(136, 256, kernel_size=3, padding=1)
         self.lat_fm38 = nn.Conv2d(48, 256, kernel_size=3, padding=1)
@@ -52,14 +52,20 @@ class SSDEff(nn.Module):
         self.final_fm10 = nn.Conv2d(384, 256, kernel_size=1, padding=0)
         self.final_fm19 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
         self.final_fm38 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1)
+        '''
         
-        # Detection layer #shared across all feature maps
-        #self.detection_layer = nn.Conv2d(256, 6*(4+n_classes), kernel_size=3, padding=1)
-        self.det_fm38 = nn.Conv2d(256, 4*(4+n_classes), kernel_size=3, padding=1)
-        self.det_fm19 = nn.Conv2d(256, 6*(4+n_classes), kernel_size=3, padding=1)
-        self.det_fm10 = nn.Conv2d(256, 6*(4+n_classes), kernel_size=3, padding=1)
+        # FPN layers
+        self.lat_fm10 = nn.Conv2d(384, 136, kernel_size=1, padding=0)
+        self.lat_fm19 = nn.Conv2d(136, 48, kernel_size=1, padding=0)
+        self.final_fm19 = nn.Conv2d(136, 136, kernel_size=3, stride=1, padding=1)
+        self.final_fm38 = nn.Conv2d(48, 48, kernel_size=3, stride=1, padding=1)
+        
+        # Detection layers
+        self.det_fm38 = nn.Conv2d(48, 4*(4+n_classes), kernel_size=3, padding=1)
+        self.det_fm19 = nn.Conv2d(136, 6*(4+n_classes), kernel_size=3, padding=1)
+        self.det_fm10 = nn.Conv2d(384, 6*(4+n_classes), kernel_size=3, padding=1)
         self.det_fm5 = nn.Conv2d(256, 6*(4+n_classes), kernel_size=3, padding=1)
-        self.det_fm3 = nn.Conv2d(256, 6*(4+n_classes), kernel_size=3, padding=1)
+        self.det_fm3 = nn.Conv2d(256, 4*(4+n_classes), kernel_size=3, padding=1)
         
         self.init_weights()
         self.priors_cxcy = self.get_prior_boxes()
@@ -82,6 +88,7 @@ class SSDEff(nn.Module):
         fm5 = self.extras[0](fm10)
         fm3 = self.extras[1](fm5)
         
+        '''
         # Top-down + lateral connections
         fm10 = F.relu(self.final_fm10(fm10))
         
@@ -90,12 +97,19 @@ class SSDEff(nn.Module):
         
         fm38 = F.relu(self.lat_fm38(fm38)) + F.interpolate(fm19, size=(38,38), mode='nearest')
         fm38 = F.relu(self.final_fm38(fm38))
+        '''
+        fm19 = fm19 + F.interpolate(F.relu(self.lat_fm10(fm10)), size=(19,19), mode='nearest')
+        fm19 = F.relu(self.final_fm19(fm19))
+        
+        fm38 = fm38 + F.interpolate(F.relu(self.lat_fm19(fm19)), size=(38,38), mode='nearest')
+        fm38 = F.relu(self.final_fm38(fm38))
+        
 
         # Detection
         box_size = 4 + self.n_classes  # each box has 25 values: 4 offset values and 21 class scores
         #
         det_fm38 = self.det_fm38(fm38)
-        det_fm38 = det_fm38.permute(0, 2, 3, 1).contiguous().view(n, -1, box_size)  # (N, 8664, box_size)
+        det_fm38 = det_fm38.permute(0, 2, 3, 1).contiguous().view(n, -1, box_size)  # (N, 5776, box_size)
         
         det_fm19 = self.det_fm19(fm19)
         det_fm19 = det_fm19.permute(0, 2, 3, 1).contiguous().view(n, -1, box_size)  # (N, 2166, box_size)
@@ -107,9 +121,9 @@ class SSDEff(nn.Module):
         det_fm5 = det_fm5.permute(0, 2, 3, 1).contiguous().view(n, -1, box_size)  # (N, 150, box_size)
         
         det_fm3 = self.det_fm3(fm3)
-        det_fm3 = det_fm3.permute(0, 2, 3, 1).contiguous().view(n, -1, box_size)  # (N, 54, box_size)
+        det_fm3 = det_fm3.permute(0, 2, 3, 1).contiguous().view(n, -1, box_size)  # (N, 36, box_size)
         
-        detection = torch.cat([det_fm38, det_fm19, det_fm10, det_fm5, det_fm3], dim=1)  # (N, 11634, box_size)
+        detection = torch.cat([det_fm38, det_fm19, det_fm10, det_fm5, det_fm3], dim=1)  # (N, 8692, box_size)
         offsets, class_scores = torch.split(detection, [4,self.n_classes], dim=2)
         
         return offsets, class_scores
@@ -118,7 +132,7 @@ class SSDEff(nn.Module):
     def get_prior_boxes(self):
         '''
         Return: 
-            prior boxes in center-size coordinates, a tensor of dimensions (11634, 4)
+            prior boxes in center-size coordinates, a tensor of dimensions (n_priors, 4)
         '''
         fmap_dims = {'fm38': 38,
                      'fm19': 19,
@@ -126,17 +140,17 @@ class SSDEff(nn.Module):
                      'fm5': 5,
                      'fm3': 3}
 
-        obj_scales = {'fm38': 0.06,
-                      'fm19': 0.12,
-                      'fm10': 0.24,
-                      'fm5': 0.48,
+        obj_scales = {'fm38': 0.08,
+                      'fm19': 0.16,
+                      'fm10': 0.32,
+                      'fm5': 0.54,
                       'fm3': 0.75}
 
-        aspect_ratios = {'fm38': [1., 2., 3., 0.5, .333],
+        aspect_ratios = {'fm38': [1., 2., 0.5],
                          'fm19': [1., 2., 3., 0.5, .333],
                          'fm10': [1., 2., 3., 0.5, .333],
                          'fm5': [1., 2., 3., 0.5, .333],
-                         'fm3': [1., 2., 3., 0.5, .333]}
+                         'fm3': [1., 2., 0.5]}
 
         return create_prior_boxes(fmap_dims, obj_scales, aspect_ratios, last_scale=0.85)
     
@@ -144,8 +158,8 @@ class SSDEff(nn.Module):
     def post_process_top_k(self, predicted_offsets, predicted_scores, score_threshold, iou_threshold, top_k):
         ''' return top_k detections sorted by confidence score
         Params:
-            predicted_offsets: predicted offsets w.r.t the 3206 prior boxes, (gcxgcy), a tensor of dimensions (N, 11634, 4)
-            predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 11634, n_classes)
+            predicted_offsets: predicted offsets w.r.t the prior boxes, (gcxgcy), a tensor of dimensions (N, 8692, 4)
+            predicted_scores: class scores for each of the encoded locations/boxes, a tensor of dimensions (N, 8692, n_classes)
             score_threshold: minimum threshold for a box to be considered a match for a certain class
             iou_threshold: maximum overlap two boxes can have so that the one with the lower score is not suppressed via NMS
             top_k: int, if the result contains more than k objects, just return k objects that have largest confidence score
@@ -160,7 +174,7 @@ class SSDEff(nn.Module):
         scores = list()
         N, n_priors = predicted_offsets.shape[0:2]
         
-        predicted_scores = F.softmax(predicted_scores, dim=2)  # (N, 11634, n_classes)
+        predicted_scores = F.softmax(predicted_scores, dim=2)  # (N, 8692, n_classes)
         
         # for each image in the batch
         for i in range(N):
@@ -169,17 +183,17 @@ class SSDEff(nn.Module):
             scores_i = list()
             
             # convert gcxgcy to xy coordinates format
-            boxes_xy = cxcy_to_xy(gcxgcy_to_cxcy(predicted_offsets[i], self.priors_cxcy)) # (11634, 4)
+            boxes_xy = cxcy_to_xy(gcxgcy_to_cxcy(predicted_offsets[i], self.priors_cxcy)) # (8692, 4)
 
             for c in range(1, self.n_classes):
                 # Keep only predicted boxes and scores where scores for this class are above the minimum score
-                class_scores = predicted_scores[i][:, c]  # (11634)
+                class_scores = predicted_scores[i][:, c]  # (8692)
                 qualify_mask = class_scores > score_threshold
                 n_qualified = qualify_mask.sum().item()
                 if n_qualified == 0:
                     continue
                 boxes_class_c = boxes_xy[qualify_mask]  # (n_qualified, 4)
-                boxes_score_class_c = class_scores[qualify_mask]  # (n_qualified) <= 11634
+                boxes_score_class_c = class_scores[qualify_mask]  # (n_qualified) <= 8692
                 
                 final_box_ids = nms(boxes_class_c, boxes_score_class_c, iou_threshold)  # (n_final_boxes,)
                 
