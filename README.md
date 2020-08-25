@@ -5,17 +5,21 @@ This work is for learning purpose and the main goal is to recreate the results o
 as published in this [paper](https://arxiv.org/abs/1512.02325).
 
 ## Illustrations
-#### Learning curve
-
 #### Results on VOC2007 test set (mAP)
-| Backbone          | Input Size  |   mAP   | Model Size | Download  |
-| :---------------: | :----------:| :-----: | :--------: | :-------: |
-|  VGG16 by lufficc |     300     |  77.7   |   101 MB   | [model](https://github.com/lufficc/SSD/releases/download/1.2/vgg_ssd300_voc0712.pth)  |
-|  VGG16 by me      |     300     |  60.9   |   101 MB   | none      |
-|  Mobilenet V2     |     320     |  70.5   |   21.9 MB  |   |
-|  EfficientNet-B3  |     300     |  76.2   |   47.7 MB  |   |
+| Backbone          | Input Size |   mAP   | Model Size | Download  |
+| :---------------: | :---------:| :-----: | :--------: | :-------: |
+|  VGG16 by lufficc |     300    |  77.7   |   101 MB   | [model](https://github.com/lufficc/SSD/releases/download/1.2/vgg_ssd300_voc0712.pth)  |
+|  VGG16 by me      |     300    |  60.9   |   101 MB   | none      |
+|  Mobilenet V2     |     320    |  70.5   |   21.9 MB  | [model](https://github.com/ncthuan/single-shot-detection-pytorch/releases/download/0.0/ssd_efficientnet_b3.pt)  |
+|  EfficientNet-B3  |     300    |  78.3   |   47.7 MB  | [model](https://github.com/ncthuan/single-shot-detection-pytorch/releases/download/0.0/ssd_mobilenetv2.pt)  |
  
-#### Demo
+#### Samples
+![](results/ssdeff_sample_detection/000001.jpg) ![](results/ssdeff_sample_detection/000010.jpg)
+![](results/ssdeff_sample_detection/000004.jpg) 
+![](results/ssdeff_sample_detection/000014.jpg) 
+![](results/ssdeff_sample_detection/000019.jpg)
+![](results/ssdeff_sample_detection/000084.jpg)<br>
+![](results/ssdeff_sample_detection/000073.jpg) ![](results/ssdeff_sample_detection/000075.jpg)
 
 ## Dependencies
 * Python 3
@@ -53,7 +57,7 @@ So I had to turn to optimize my augmentation and dataloader code to tackle it.
 
 * In the SSD model with EfficientNetB3 as the backbone, I used pretrained weight from 
 [lufficc's SSD implementation](https://github.com/lufficc/SSD/tree/master/) and included some layers that replicate the idea of Feature Pyramid Networks.
-which probably improved the net's performance on smaller objects. The performance improved from 73.9 mAP (lufficc's implementation) to 76.2 mAP.
+which probably improved the net's performance on smaller objects. The performance improved from 73.9 mAP (lufficc's implementation) to 78.3 mAP.
 
 
 ## To do
@@ -62,6 +66,7 @@ which probably improved the net's performance on smaller objects. The performanc
 * [Feature Pyramid Networks (FPN)](https://medium.com/@jonathan_hui/understanding-feature-pyramid-networks-for-object-detection-fpn-45b227b9106c)
 * [Focal loss](https://arxiv.org/abs/1708.02002v2)
 * Experiment with more augmentations (CutMix)
+
 
 ## Reference
 * [a-PyTorch-Tutorial-to-Object-Detection](https://github.com/sgrvinod/a-PyTorch-Tutorial-to-Object-Detection) - sgrvinod
