@@ -27,7 +27,7 @@ rev_label_map = {v: k for k, v in label_map.items()}  # Inverse mapping
 distinct_colors = [(230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130, 48), (145, 30, 180), 
                    (70, 240, 240), (240, 50, 230), (210, 245, 60), (250, 190, 212), (0, 128, 128), (220, 190, 255), 
                    (170, 110, 40), (128, 0, 0), (170, 255, 195), (128, 128, 0), (255, 215, 180), (0, 0, 128), 
-                   (128, 128, 128), (0, 0, 0), (255, 255, 255)
+                   (128, 128, 128), (255, 255, 255), (0, 0, 0)
                   ]
 label_color_map = {k: distinct_colors[i] for i, k in enumerate(label_map.keys())}
 
@@ -625,7 +625,7 @@ def visualize_boxes(img, boxes, labels, thickness=2, font_thickness=1, font_scal
         cv2.rectangle(img, (x_min,y_min), (x_max,y_max), color, thickness)
         ((text_width, text_height), _) = cv2.getTextSize(title, font, font_scale, font_thickness)
         cv2.rectangle(img, (x_min, y_min - int(1.3 * text_height)), (x_min + text_width, y_min), color, -1)
-        cv2.putText(img, title, (x_min, y_min - int(0.3 * text_height)), font, font_scale, (255,255,255), 
+        cv2.putText(img, title, (x_min, y_min - int(0.3 * text_height)), font, font_scale, (0, 0, 0), 
                     font_thickness, lineType=cv2.LINE_AA)
     return img
 
