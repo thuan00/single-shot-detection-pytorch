@@ -10,6 +10,7 @@ as published in this [paper](https://arxiv.org/abs/1512.02325).
 | :---------------: | :---------:| :-----: | :--------: | :-------: |
 |  VGG16 by lufficc |     300    |  77.7   |   101 MB   | [model](https://github.com/lufficc/SSD/releases/download/1.2/vgg_ssd300_voc0712.pth)  |
 |  VGG16 by me      |     300    |  60.9   |   101 MB   | none      |
+|  VGG16 2nd attempt|     300    |  77.2   |   101 MB   |           |
 |  Mobilenet V2     |     320    |  70.5   |   21.9 MB  | [model](https://github.com/ncthuan/single-shot-detection-pytorch/releases/download/0.0/ssd_efficientnet_b3.pt)  |
 |  EfficientNet-B3  |     300    |  78.3   |   47.7 MB  | [model](https://github.com/ncthuan/single-shot-detection-pytorch/releases/download/0.0/ssd_mobilenetv2.pt)  |
  
